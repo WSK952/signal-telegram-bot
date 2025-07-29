@@ -3,89 +3,102 @@ import time
 import datetime
 import pytz
 import pandas as pd
-import logging
+import numpy as np
 from telegram import Bot
-import os
 
-# CONFIGURATION
+# === CONFIGURATION ===
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
 CHAT_ID = "@Signalwskbot"
-SYMBOLS = ["ETH/USDT", "BTC/USDT", "BNB/USDT", "XRP/USDT"]
+TIMEZONE = pytz.timezone("Europe/Paris")
+SYMBOLS = [
+    "BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT",
+    "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"
+]
+INTERVAL = "1m"
 RSI_PERIOD = 14
 EMA_PERIOD = 9
 SIGNAL_DURATION = 60  # secondes
-TIMEZONE = pytz.timezone("Europe/Paris")
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
 
-# Initialisation
 bot = Bot(token=TOKEN)
-log_file = os.path.join(os.path.dirname(__file__), "signals_history.csv")
 
-def get_ohlcv(symbol):
-    now = datetime.datetime.now(TIMEZONE)
-    timestamps = [now - datetime.timedelta(minutes=i) for i in range(100)][::-1]
-    prices = [100 + i*0.1 for i in range(100)]
-    df = pd.DataFrame({
-        "timestamp": timestamps,
-        "close": prices
-    })
-    return df
+def get_klines(symbol, interval="1m", limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    response = requests.get(url)
+    data = response.json()
+    df = pd.DataFrame(data, columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
+    ])
+    df["close"] = df["close"].astype(float)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms").dt.tz_localize("UTC").dt.tz_convert(TIMEZONE)
+    return df[["timestamp", "close"]]
 
 def calculate_indicators(df):
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD).mean()
+
+    # RSI
     delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(RSI_PERIOD).mean()
-    avg_loss = loss.rolling(RSI_PERIOD).mean()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).rolling(RSI_PERIOD).mean()
+    avg_loss = pd.Series(loss).rolling(RSI_PERIOD).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
+
+    # MACD
+    ema_fast = df["close"].ewm(span=MACD_FAST).mean()
+    ema_slow = df["close"].ewm(span=MACD_SLOW).mean()
+    df["MACD"] = ema_fast - ema_slow
+    df["MACD_SIGNAL"] = df["MACD"].ewm(span=MACD_SIGNAL).mean()
+
     return df
 
-def send_signal(pair, rsi, ema, close, action, timestamp):
-    message = (
+def send_signal(symbol, rsi, ema, macd, macd_signal, close, action, timestamp):
+    msg = (
         f"📢 Signal détecté : {action}\n"
-        f"🌐 Pair : {pair}\n"
+        f"📊 Pair : {symbol}\n"
         f"📉 RSI : {rsi:.2f}\n"
         f"📈 EMA : {ema:.2f}\n"
+        f"📊 MACD : {macd:.2f}\n"
+        f"📊 MACD Signal : {macd_signal:.2f}\n"
         f"💰 Close : {close:.2f}\n"
         f"🕒 Heure : {timestamp.strftime('%H:%M:%S')}\n"
         f"📆 Durée : {SIGNAL_DURATION}s"
     )
-    bot.send_message(chat_id=CHAT_ID, text=message)
-    log_result(pair, action, rsi, ema, close, timestamp)
-
-def log_result(pair, action, rsi, ema, close, timestamp):
-    result = {
-        "time": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-        "pair": pair,
-        "rsi": round(rsi, 2),
-        "ema": round(ema, 2),
-        "close": round(close, 2),
-        "signal": action
-    }
-    df = pd.DataFrame([result])
-    if not os.path.exists(log_file):
-        df.to_csv(log_file, index=False)
-    else:
-        df.to_csv(log_file, mode='a', header=False, index=False)
+    bot.send_message(chat_id=CHAT_ID, text=msg)
 
 def run_bot():
     while True:
         now = datetime.datetime.now(TIMEZONE)
-        for pair in SYMBOLS:
-            df = get_ohlcv(pair)
-            df = calculate_indicators(df)
-            rsi = df["RSI"].iloc[-1]
-            ema = df["EMA"].iloc[-1]
-            close = df["close"].iloc[-1]
-            action = None
-            if rsi < 30 and close > ema:
-                action = "CALL 📈"
-            elif rsi > 70 and close < ema:
-                action = "PUT 📉"
-            if action:
-                send_signal(pair, rsi, ema, close, action, now)
-        time.sleep(60)
+        for symbol in SYMBOLS:
+            try:
+                df = get_klines(symbol, INTERVAL)
+                df = calculate_indicators(df)
+                latest = df.iloc[-1]
+                rsi = latest["RSI"]
+                ema = latest["EMA"]
+                macd = latest["MACD"]
+                macd_signal = latest["MACD_SIGNAL"]
+                close = latest["close"]
+                action = None
+
+                # CONDITIONS FIABLES
+                if rsi < 30 and macd > macd_signal and close > ema:
+                    action = "CALL 📈"
+                elif rsi > 70 and macd < macd_signal and close < ema:
+                    action = "PUT 📉"
+
+                if action:
+                    send_signal(symbol, rsi, ema, macd, macd_signal, close, action, now)
+
+            except Exception as e:
+                print(f"Erreur avec {symbol} : {e}")
+
+        time.sleep(SIGNAL_DURATION)
 
 if __name__ == "__main__":
     run_bot()
