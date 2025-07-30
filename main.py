@@ -85,8 +85,6 @@ async def monitoring_loop():
         return
     is_running = True
 
-    await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !")
-
     last_summary = time.time()
     summary_interval = 900  # 15 minutes
 
@@ -130,7 +128,7 @@ async def monitoring_loop():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("✅ Bot lancé avec succès et prêt à analyser les marchés !", reply_markup=reply_markup)
+    await update.message.reply_text("🟢 Bot démarré et en cours d’analyse des marchés.", reply_markup=reply_markup)
     await monitoring_loop()
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,7 +137,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data == "stop":
         is_running = False
-        await query.edit_message_text("🛑 Bot arrêté par l'utilisateur.")
+        await query.edit_message_text("🛑 Bot arrêté avec succès.")
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
