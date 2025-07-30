@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: signal-telegram-bot
-    env: python
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
-    pythonVersion: 3.10.13
