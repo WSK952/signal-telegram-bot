@@ -5,7 +5,7 @@ import pytz
 import pandas as pd
 import numpy as np
 from telegram import Bot
-import os
+import asyncio
 
 # --- CONFIG ---
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
@@ -40,14 +40,13 @@ def calculate_indicators(df):
     avg_loss = loss.rolling(RSI_PERIOD).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
-
     exp1 = df["close"].ewm(span=MACD_FAST, adjust=False).mean()
     exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
     df["MACD"] = exp1 - exp2
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
     return df
 
-# --- Signal ---
+# --- Vérifier signal ---
 def check_signal(df):
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -63,7 +62,7 @@ def check_signal(df):
         return None
 
 # --- Envoyer signal ---
-def send_signal(pair, signal_type, df):
+async def send_signal(pair, signal_type, df):
     timestamp = df["timestamp"].iloc[-1].strftime("%H:%M:%S")
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -80,11 +79,17 @@ def send_signal(pair, signal_type, df):
 🕒 Heure : {timestamp}
 📆 Durée : 60s"""
 
-    bot.send_message(chat_id=CHAT_ID, text=message)
+    await bot.send_message(chat_id=CHAT_ID, text=message)
 
-# --- Boucle principale ---
-def run():
-    bot.send_message(chat_id=CHAT_ID, text="✅ Bot de signaux lancé avec succès !")
+# --- Analyse sans signal ---
+async def send_no_signal(pair):
+    timestamp = datetime.datetime.now(TIMEZONE).strftime("%H:%M")
+    msg = f"⏳ [{pair}] Analyse terminée à {timestamp} - Aucun signal."
+    await bot.send_message(chat_id=CHAT_ID, text=msg)
+
+# --- Lancer le bot ---
+async def main():
+    await bot.send_message(chat_id=CHAT_ID, text="✅ Bot de signaux lancé avec succès !")
     while True:
         for symbol in SYMBOLS:
             try:
@@ -92,16 +97,12 @@ def run():
                 df = calculate_indicators(df)
                 signal = check_signal(df)
                 if signal:
-                    send_signal(symbol, signal, df)
+                    await send_signal(symbol, signal, df)
+                else:
+                    await send_no_signal(symbol)
             except Exception as e:
                 print(f"Erreur sur {symbol} :", e)
-        time.sleep(60)
-
-import asyncio
-
-async def main():
-    await bot.send_message(chat_id=CHAT_ID, text="✅ Bot de signaux lancé avec succès !")
-    run()
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main())
