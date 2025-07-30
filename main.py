@@ -5,12 +5,12 @@ import pytz
 import pandas as pd
 import numpy as np
 from telegram import Bot
+import asyncio
 
 # --- CONFIG ---
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
 CHAT_ID = "1091559539"
-SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT",
-           "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
+SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT", "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
 INTERVAL = "1m"
 RSI_PERIOD = 14
 EMA_PERIOD = 9
@@ -33,7 +33,6 @@ def get_ohlcv(symbol):
 # --- Indicateurs ---
 def calculate_indicators(df):
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD).mean()
-
     delta = df["close"].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -48,7 +47,7 @@ def calculate_indicators(df):
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
     return df
 
-# --- Signal ---
+# --- Détection de signal ---
 def check_signal(df):
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -63,8 +62,8 @@ def check_signal(df):
     else:
         return None
 
-# --- Envoyer signal ---
-def send_signal(pair, signal_type, df):
+# --- Envoi du signal Telegram ---
+async def send_signal(pair, signal_type, df):
     timestamp = df["timestamp"].iloc[-1].strftime("%H:%M:%S")
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -81,10 +80,10 @@ def send_signal(pair, signal_type, df):
 🕒 Heure : {timestamp}
 📆 Durée : 60s"""
 
-    bot.send_message(chat_id=CHAT_ID, text=message)
+    await bot.send_message(chat_id=CHAT_ID, text=message)
 
 # --- Boucle principale ---
-def run():
+async def run():
     while True:
         for symbol in SYMBOLS:
             try:
@@ -92,10 +91,11 @@ def run():
                 df = calculate_indicators(df)
                 signal = check_signal(df)
                 if signal:
-                    send_signal(symbol, signal, df)
+                    await send_signal(symbol, signal, df)
             except Exception as e:
                 print(f"Erreur sur {symbol} :", e)
-        time.sleep(60)
+        await asyncio.sleep(60)
 
+# --- Lancer le bot ---
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())
