@@ -1,89 +1,119 @@
-import logging
-import asyncio
-import datetime
-from telegram import Bot
-from telegram.ext import Application, CommandHandler
 import requests
+import time
+import datetime
+import pytz
 import pandas as pd
 import numpy as np
+from telegram import Bot
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import os
 
-# Configuration
-TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # à remplir dans Railway
-PAIR_LIST = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'DOGEUSDT', 'LINKUSDT', 'DASHUSDT', 'BCHUSDT', 'FILUSDT', 'LTCUSDT', 'YFIUSDT', 'ZECUSDT']
-INTERVAL = '1m'
-LIMIT = 100
+# --- CONFIG ---
+TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
+CHAT_ID = "1091559539"
+SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT", "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
+INTERVAL = "1m"
+RSI_PERIOD = 14
+EMA_PERIOD = 9
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+TIMEZONE = pytz.timezone("Europe/Paris")
+bot = Bot(token=TOKEN)
 
-# Log
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
-
-# Récupération des données OHLCV depuis Binance
-def get_ohlcv(pair):
-    url = f'https://api.binance.com/api/v3/klines?symbol={pair}&interval={INTERVAL}&limit={LIMIT}'
+# --- Google Sheets ---
+def init_sheet():
     try:
-        response = requests.get(url)
-        data = response.json()
-        df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','quote_asset_volume','num_trades','taker_buy_base','taker_buy_quote','ignore'])
-        df['close'] = df['close'].astype(float)
-        df['open'] = df['open'].astype(float)
-        return df
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name("google_credentials.json", scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("Trading Signals").sheet1
+        return sheet
     except Exception as e:
-        logger.error(f"Erreur lors de la récupération des données : {e}")
+        print("Erreur GSheet:", e)
         return None
 
-# Calcul des indicateurs RSI, EMA et MACD
-def compute_indicators(df):
-    df['ema'] = df['close'].ewm(span=14).mean()
-    delta = df['close'].diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = pd.Series(gain).rolling(window=14).mean()
-    avg_loss = pd.Series(loss).rolling(window=14).mean()
+sheet = init_sheet()
+
+# --- Binance OHLCV ---
+def get_ohlcv(symbol):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit=100"
+    response = requests.get(url)
+    data = response.json()
+    df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_", "_", "_", "_", "_"])
+    df["close"] = df["close"].astype(float)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms').dt.tz_localize("UTC").dt.tz_convert(TIMEZONE)
+    return df[["timestamp", "close"]]
+
+# --- Indicateurs ---
+def calculate_indicators(df):
+    df["EMA"] = df["close"].ewm(span=EMA_PERIOD).mean()
+    delta = df["close"].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(RSI_PERIOD).mean()
+    avg_loss = loss.rolling(RSI_PERIOD).mean()
     rs = avg_gain / avg_loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    exp1 = df['close'].ewm(span=12).mean()
-    exp2 = df['close'].ewm(span=26).mean()
-    df['macd'] = exp1 - exp2
-    df['signal'] = df['macd'].ewm(span=9).mean()
+    df["RSI"] = 100 - (100 / (1 + rs))
+
+    exp1 = df["close"].ewm(span=MACD_FAST, adjust=False).mean()
+    exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
+    df["MACD"] = exp1 - exp2
+    df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
     return df
 
-# Vérifie si un signal fiable existe
+# --- Signal ---
 def check_signal(df):
-    if df is None or df.empty:
-        return None
-    last = df.iloc[-1]
-    if last['rsi'] < 30 and last['macd'] > last['signal']:
-        return "CALL"
-    elif last['rsi'] > 70 and last['macd'] < last['signal']:
-        return "PUT"
-    return None
+    rsi = df["RSI"].iloc[-1]
+    ema = df["EMA"].iloc[-1]
+    macd = df["MACD"].iloc[-1]
+    macd_signal = df["MACD_Signal"].iloc[-1]
+    close = df["close"].iloc[-1]
 
-# Envoie le message Telegram
-async def send_signal(application):
+    if rsi < 30 and close > ema and macd > macd_signal:
+        return "CALL 📈"
+    elif rsi > 70 and close < ema and macd < macd_signal:
+        return "PUT 📉"
+    else:
+        return None
+
+# --- Envoyer signal ---
+def send_signal(pair, signal_type, df):
+    timestamp = df["timestamp"].iloc[-1].strftime("%H:%M:%S")
+    rsi = df["RSI"].iloc[-1]
+    ema = df["EMA"].iloc[-1]
+    macd = df["MACD"].iloc[-1]
+    macd_signal = df["MACD_Signal"].iloc[-1]
+    close = df["close"].iloc[-1]
+
+    message = f"""📢 Signal détecté : {signal_type}
+🌐 Pair : {pair}
+📉 RSI : {rsi:.2f}
+📈 EMA : {ema:.2f}
+📊 MACD : {macd:.4f} / Signal : {macd_signal:.4f}
+💰 Close : {close:.2f}
+🕒 Heure : {timestamp}
+📆 Durée : 60s"""
+
+    bot.send_message(chat_id=CHAT_ID, text=message)
+
+    if sheet:
+        sheet.append_row([str(datetime.datetime.now()), pair, signal_type, round(rsi, 2), round(ema, 2), round(macd, 4), round(macd_signal, 4), round(close, 2)])
+
+# --- Boucle principale ---
+def run():
     while True:
-        for pair in PAIR_LIST:
-            df = get_ohlcv(pair)
-            if df is not None:
-                df = compute_indicators(df)
+        for symbol in SYMBOLS:
+            try:
+                df = get_ohlcv(symbol)
+                df = calculate_indicators(df)
                 signal = check_signal(df)
                 if signal:
-                    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    msg = f"✅ Signal {signal} détecté pour {pair} à {now}"
-                    await application.bot.send_message(chat_id=CHAT_ID, text=msg)
-        await asyncio.sleep(60)
+                    send_signal(symbol, signal, df)
+            except Exception as e:
+                print(f"Erreur sur {symbol} :", e)
+        time.sleep(60)
 
-# Commande de test
-async def start(update, context):
-    await update.message.reply_text("🤖 Bot opérationnel.")
-
-# Lancement du bot
-async def main():
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    asyncio.create_task(send_signal(application))
-    await application.run_polling()
-
-if __name__ == '__main__':
-    asyncio.run(main())
+if __name__ == "__main__":
+    run()
