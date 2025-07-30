@@ -1,31 +1,32 @@
+# ✅ main.py - Bot de signaux amélioré (v31.07.2025-00h33)
 import requests
 import time
 import datetime
 import pytz
 import pandas as pd
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import asyncio
 
-# --- CONFIG ---
+# CONFIG
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
 CHAT_ID = "1091559539"
-SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT", "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
-INTERVAL = "1m"
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT"]
+INTERVALS = ["1m", "5m", "10m", "15m"]
+TIMEZONE = pytz.timezone("Europe/Paris")
 RSI_PERIOD = 14
 EMA_PERIOD = 9
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
-TIMEZONE = pytz.timezone("Europe/Paris")
 
 is_running = False
 last_sent_signals = {}
-active_trades = {}
+tracked_signals = {}
 app = Application.builder().token(TOKEN).build()
 
-def get_ohlcv(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit=100"
+def get_ohlcv(symbol, interval):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
     data = requests.get(url).json()
     df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_", "_", "_", "_", "_"])
     df["close"] = df["close"].astype(float)
@@ -47,141 +48,107 @@ def calculate_indicators(df):
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
     return df
 
-def check_signal(df):
-    rsi = df["RSI"].iloc[-1]
-    ema = df["EMA"].iloc[-1]
-    macd = df["MACD"].iloc[-1]
-    macd_signal = df["MACD_Signal"].iloc[-1]
-    close = df["close"].iloc[-1]
-    confidence = 0
-
-    if rsi < 30:
-        confidence += 35
-    elif rsi > 70:
-        confidence += 35
-
-    if (signal_type := ("CALL ð" if rsi < 30 else "PUT ð")):
-        if (signal_type == "CALL ð" and close > ema and macd > macd_signal):
-            confidence += 30
-        elif (signal_type == "PUT ð" and close < ema and macd < macd_signal):
-            confidence += 30
-
-        if abs(macd - macd_signal) > 0.1:
-            confidence += 10
-
-        if abs(close - ema) / close < 0.005:
-            confidence -= 10
-
-        if confidence >= 50:
-            return signal_type, confidence
-
+def check_signal_mtf(dataframes):
+    votes = {"CALL": 0, "PUT": 0}
+    for df in dataframes:
+        rsi = df["RSI"].iloc[-1]
+        ema = df["EMA"].iloc[-1]
+        macd = df["MACD"].iloc[-1]
+        macd_signal = df["MACD_Signal"].iloc[-1]
+        close = df["close"].iloc[-1]
+        if rsi < 30 and close > ema and macd > macd_signal:
+            votes["CALL"] += 1
+        elif rsi > 70 and close < ema and macd < macd_signal:
+            votes["PUT"] += 1
+    if votes["CALL"] >= 3:
+        return "CALL 📈", int((votes["CALL"] / len(dataframes)) * 100)
+    elif votes["PUT"] >= 3:
+        return "PUT 📉", int((votes["PUT"] / len(dataframes)) * 100)
     return None, 0
 
 async def send_signal(pair, signal_type, confidence, df):
+    close = df["close"].iloc[-1]
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
     macd = df["MACD"].iloc[-1]
     macd_signal = df["MACD_Signal"].iloc[-1]
-    close = df["close"].iloc[-1]
-    trade_time = df["timestamp"].iloc[-1] + pd.Timedelta(minutes=1)
-
-    active_trades[pair] = {
-        "direction": signal_type,
-        "time": trade_time,
-        "price": close
-    }
+    current_time = df["timestamp"].iloc[-1]
 
     message = (
-        f"ð¨ *Signal dÃ©tectÃ©* : {signal_type}
-
-"
-        f"ð *Paire* : `{pair}`
-"
-        f"ð *Trade prÃ©vu Ã * : {trade_time.strftime('%H:%M:%S')} (UTC+2)
-"
-        f"ð *RSI* : {rsi:.2f}
-"
-        f"ð *EMA* : {ema:.2f}
-"
-        f"ð *MACD* : {macd:.4f}
-"
-        f"âï¸ *MACD Signal* : {macd_signal:.4f}
-"
-        f"ð° *Close* : {close:.2f}
-"
-        f"ð *Taux de fiabilitÃ©* : {confidence:.0f}%"
+        f"🚨 *Signal détecté* : {signal_type}\n"
+        f"📊 *Paire* : `{pair}`\n"
+        f"🕒 *Heure de détection* : {current_time.strftime('%H:%M:%S')}\n"
+        f"✅ *Fiabilité estimée* : {confidence}%\n\n"
+        f"📉 RSI : {rsi:.2f}\n"
+        f"📈 EMA : {ema:.2f}\n"
+        f"📊 MACD : {macd:.4f}\n"
+        f"⚙️ MACD Signal : {macd_signal:.4f}\n"
+        f"💰 Close : {close:.2f}\n"
     )
     await app.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    tracked_signals[pair] = {"time": current_time, "type": signal_type, "price": close}
 
-async def check_trade_result():
-    now = datetime.datetime.now(TIMEZONE)
-    for pair in list(active_trades.keys()):
-        trade = active_trades[pair]
-        if now > trade["time"] + pd.Timedelta(minutes=1):
-            df = get_ohlcv(pair)
-            current_price = df["close"].iloc[-1]
-            result = (
-                "â Signal validÃ© (gagnÃ©)" if
-                (trade["direction"] == "CALL ð" and current_price > trade["price"]) or
-                (trade["direction"] == "PUT ð" and current_price < trade["price"])
-                else "â Signal invalidÃ© (perdu)"
-            )
-            await app.bot.send_message(chat_id=CHAT_ID, text=f"ð¢ *{pair}* - {result}", parse_mode="Markdown")
-            del active_trades[pair]
+async def verify_signals():
+    for symbol, info in list(tracked_signals.items()):
+        try:
+            df = get_ohlcv(symbol, "1m")
+            close = df["close"].iloc[-1]
+            entry = info["price"]
+            result = "✅ Signal VALIDÉ" if (
+                info["type"].startswith("CALL") and close > entry
+                or info["type"].startswith("PUT") and close < entry
+            ) else "❌ Signal NON VALIDÉ"
+            msg = f"{result} sur `{symbol}` ({info['type']})\nPrix entrée : {entry} | Prix actuel : {close:.2f}"
+            await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+        except:
+            continue
+        del tracked_signals[symbol]
 
 async def monitoring_loop():
     global is_running
-    if is_running:
-        return
+    if is_running: return
     is_running = True
-
-    await app.bot.send_message(chat_id=CHAT_ID, text="ð¢ Bot dÃ©marrÃ© et en cours dâanalyse des marchÃ©s.")
+    await app.bot.send_message(chat_id=CHAT_ID, text="🟢 Bot actif. Analyse multi-timeframe en cours...")
 
     last_summary = time.time()
-    summary_interval = 900
+    summary_interval = 900  # 15 min
 
     try:
         while is_running:
-            await check_trade_result()
+            await verify_signals()
             all_results = []
             for symbol in SYMBOLS:
                 try:
-                    df = get_ohlcv(symbol)
-                    df = calculate_indicators(df)
-                    signal_type, confidence = check_signal(df)
-                    if signal_type:
-                        timestamp = df["timestamp"].iloc[-1].strftime('%Y-%m-%d %H:%M')
-                        last_key = f"{symbol}_{signal_type}_{timestamp}"
-                        if last_key != last_sent_signals.get(symbol):
-                            await send_signal(symbol, signal_type, confidence, df)
-                            last_sent_signals[symbol] = last_key
+                    dfs = [calculate_indicators(get_ohlcv(symbol, interval)) for interval in INTERVALS]
+                    signal, confidence = check_signal_mtf(dfs)
+                    if signal and confidence >= 75:
+                        key = f"{symbol}_{signal}_{dfs[0]['timestamp'].iloc[-1].strftime('%Y-%m-%d %H:%M')}"
+                        if key != last_sent_signals.get(symbol):
+                            await send_signal(symbol, signal, confidence, dfs[0])
+                            last_sent_signals[symbol] = key
                     else:
-                        rsi = df["RSI"].iloc[-1]
+                        rsi = dfs[0]["RSI"].iloc[-1]
                         if rsi < 35:
-                            all_results.append(f"â ï¸ {symbol} : RSI {rsi:.2f} (potentiel CALL)")
+                            all_results.append(f"⚠️ {symbol} RSI {rsi:.2f} (potentiel CALL)")
                         elif rsi > 65:
-                            all_results.append(f"â ï¸ {symbol} : RSI {rsi:.2f} (potentiel PUT)")
+                            all_results.append(f"⚠️ {symbol} RSI {rsi:.2f} (potentiel PUT)")
                 except Exception as e:
-                    print(f"Erreur sur {symbol} :", e)
+                    print(f"[ERREUR] {symbol} ->", e)
 
             if time.time() - last_summary > summary_interval:
                 now = datetime.datetime.now(TIMEZONE).strftime("%H:%M")
-                summary = f"ð *Rapport dâanalyse {now}*
-
-"
-                summary += "
-".join(all_results) if all_results else "Aucun mouvement intÃ©ressant actuellement."
-                await app.bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
+                msg = "\n".join(all_results) if all_results else "Aucun mouvement intéressant."
+                await app.bot.send_message(chat_id=CHAT_ID, text=f"📋 *Rapport {now}*\n\n{msg}", parse_mode="Markdown")
                 last_summary = time.time()
 
             await asyncio.sleep(60)
     finally:
         is_running = False
 
+# --- Commandes Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("ð Stop", callback_data="stop")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("ð¢ Bot dÃ©marrÃ© et en cours dâanalyse des marchÃ©s.", reply_markup=reply_markup)
+    keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
+    await update.message.reply_text("✅ Bot lancé avec analyse multi-timeframe (1m/5m/10m/15m)", reply_markup=InlineKeyboardMarkup(keyboard))
     await monitoring_loop()
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -190,7 +157,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data == "stop":
         is_running = False
-        await query.edit_message_text("ð Bot arrÃªtÃ© avec succÃ¨s.")
+        await query.edit_message_text("🛑 Bot arrêté.")
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
