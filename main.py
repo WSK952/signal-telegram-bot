@@ -3,7 +3,6 @@ import time
 import datetime
 import pytz
 import pandas as pd
-import numpy as np
 from telegram import Bot
 import asyncio
 
@@ -20,17 +19,15 @@ MACD_SIGNAL = 9
 TIMEZONE = pytz.timezone("Europe/Paris")
 bot = Bot(token=TOKEN)
 
-# --- Binance OHLCV ---
+# --- Analyse Binance ---
 def get_ohlcv(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit=100"
-    response = requests.get(url)
-    data = response.json()
+    data = requests.get(url).json()
     df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_", "_", "_", "_", "_"])
     df["close"] = df["close"].astype(float)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms').dt.tz_localize("UTC").dt.tz_convert(TIMEZONE)
     return df[["timestamp", "close"]]
 
-# --- Indicateurs ---
 def calculate_indicators(df):
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD).mean()
     delta = df["close"].diff()
@@ -40,13 +37,13 @@ def calculate_indicators(df):
     avg_loss = loss.rolling(RSI_PERIOD).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
+
     exp1 = df["close"].ewm(span=MACD_FAST, adjust=False).mean()
     exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
     df["MACD"] = exp1 - exp2
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
     return df
 
-# --- Vérifier signal ---
 def check_signal(df):
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -58,10 +55,8 @@ def check_signal(df):
         return "CALL 📈"
     elif rsi > 70 and close < ema and macd < macd_signal:
         return "PUT 📉"
-    else:
-        return None
+    return None
 
-# --- Envoyer signal ---
 async def send_signal(pair, signal_type, df):
     timestamp = df["timestamp"].iloc[-1].strftime("%H:%M:%S")
     rsi = df["RSI"].iloc[-1]
@@ -78,19 +73,15 @@ async def send_signal(pair, signal_type, df):
 💰 Close : {close:.2f}
 🕒 Heure : {timestamp}
 📆 Durée : 60s"""
-
     await bot.send_message(chat_id=CHAT_ID, text=message)
 
-# --- Analyse sans signal ---
-async def send_no_signal(pair):
-    timestamp = datetime.datetime.now(TIMEZONE).strftime("%H:%M")
-    msg = f"⏳ [{pair}] Analyse terminée à {timestamp} - Aucun signal."
-    await bot.send_message(chat_id=CHAT_ID, text=msg)
+async def monitoring_loop():
+    await bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !")
+    last_summary = time.time()
+    summary_interval = 600  # 10 minutes
 
-# --- Lancer le bot ---
-async def main():
-    await bot.send_message(chat_id=CHAT_ID, text="✅ Bot de signaux lancé avec succès !")
     while True:
+        all_results = []
         for symbol in SYMBOLS:
             try:
                 df = get_ohlcv(symbol)
@@ -99,10 +90,24 @@ async def main():
                 if signal:
                     await send_signal(symbol, signal, df)
                 else:
-                    await send_no_signal(symbol)
+                    rsi = df["RSI"].iloc[-1]
+                    if rsi < 35:
+                        all_results.append(f"⚠️ {symbol} : RSI {rsi:.2f} (possible CALL en approche)")
+                    elif rsi > 65:
+                        all_results.append(f"⚠️ {symbol} : RSI {rsi:.2f} (possible PUT en approche)")
             except Exception as e:
                 print(f"Erreur sur {symbol} :", e)
+
+        if time.time() - last_summary > summary_interval:
+            now = datetime.datetime.now(TIMEZONE).strftime("%H:%M")
+            if all_results:
+                resume = f"📊 Rapport d’analyse {now}\n\n" + "\n".join(all_results)
+            else:
+                resume = f"📊 Rapport d’analyse {now}\n\nAucun mouvement intéressant détecté sur les paires surveillées."
+            await bot.send_message(chat_id=CHAT_ID, text=resume)
+            last_summary = time.time()
+
         await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(monitoring_loop())
