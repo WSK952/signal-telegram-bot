@@ -3,7 +3,8 @@ import time
 import datetime
 import pytz
 import pandas as pd
-from telegram import Bot
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import asyncio
 
 # --- CONFIG ---
@@ -17,11 +18,10 @@ MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
 TIMEZONE = pytz.timezone("Europe/Paris")
-bot = Bot(token=TOKEN)
-is_running = False
 
-# Pour éviter les doublons de signaux
+is_running = False
 last_sent_signals = {}
+app = Application.builder().token(TOKEN).build()
 
 def get_ohlcv(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit=100"
@@ -59,47 +59,45 @@ def check_signal(df):
     return None
 
 async def send_signal(pair, signal_type, df):
-    next_candle_time = df["timestamp"].iloc[-1] + pd.Timedelta(minutes=1)
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
     macd = df["MACD"].iloc[-1]
     macd_signal = df["MACD_Signal"].iloc[-1]
     close = df["close"].iloc[-1]
+    next_time = df["timestamp"].iloc[-1] + pd.Timedelta(minutes=1)
 
     message = (
         f"🚨 *Signal détecté* : {signal_type}\n\n"
         f"📊 *Paire* : `{pair}`\n"
-        f"🕒 *Heure du trade* : {next_candle_time.strftime('%H:%M:%S')}\n\n"
+        f"🕒 *Place le trade à* : {next_time.strftime('%H:%M:%S')} (dans quelques minutes)\n\n"
         f"📉 *RSI* : {rsi:.2f}\n"
         f"📈 *EMA* : {ema:.2f}\n"
         f"📊 *MACD* : {macd:.4f}\n"
         f"⚙️ *MACD Signal* : {macd_signal:.4f}\n"
         f"💰 *Close* : {close:.2f}\n"
-        f"🧠 *Confiance élevée*\n"
+        f"🧠 *Fiabilité élevée*"
     )
-
-    await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    await app.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
 async def monitoring_loop():
     global is_running
     if is_running:
-        print("⛔️ Boucle déjà active. Ignorée.")
         return
     is_running = True
 
-    await bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé et prêt à détecter les signaux fiables !")
+    await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !")
+
     last_summary = time.time()
     summary_interval = 900  # 15 minutes
 
     try:
-        while True:
+        while is_running:
             all_results = []
             for symbol in SYMBOLS:
                 try:
                     df = get_ohlcv(symbol)
                     df = calculate_indicators(df)
                     signal = check_signal(df)
-
                     if signal:
                         timestamp = df["timestamp"].iloc[-1].strftime('%Y-%m-%d %H:%M')
                         last_key = f"{symbol}_{signal}_{timestamp}"
@@ -121,12 +119,30 @@ async def monitoring_loop():
                     resume = f"📋 *Rapport d’analyse {now}*\n\n" + "\n".join(all_results)
                 else:
                     resume = f"📋 *Rapport d’analyse {now}*\n\nAucun mouvement intéressant actuellement."
-                await bot.send_message(chat_id=CHAT_ID, text=resume, parse_mode="Markdown")
+                await app.bot.send_message(chat_id=CHAT_ID, text=resume, parse_mode="Markdown")
                 last_summary = time.time()
 
             await asyncio.sleep(60)
     finally:
         is_running = False
 
+# --- Commandes Telegram ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("✅ Bot lancé avec succès et prêt à analyser les marchés !", reply_markup=reply_markup)
+    await monitoring_loop()
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global is_running
+    query = update.callback_query
+    await query.answer()
+    if query.data == "stop":
+        is_running = False
+        await query.edit_message_text("🛑 Bot arrêté par l'utilisateur.")
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button))
+
 if __name__ == "__main__":
-    asyncio.run(monitoring_loop())
+    app.run_polling()
