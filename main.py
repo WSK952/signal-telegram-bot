@@ -1,4 +1,3 @@
-
 import requests
 import time
 import datetime
@@ -13,15 +12,19 @@ TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
 CHAT_ID = "1091559539"
 SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT", "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
 INTERVALS = ["1m", "5m", "15m"]
+TIMEZONE = pytz.timezone("Europe/Paris")
+
 RSI_PERIOD = 14
 EMA_PERIOD = 9
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
-TIMEZONE = pytz.timezone("Europe/Paris")
+ADX_PERIOD = 14
+CCI_PERIOD = 20
 
 is_running = False
 last_sent_signals = {}
+active_signals = {}
 app = Application.builder().token(TOKEN).build()
 
 def get_ohlcv(symbol, interval):
@@ -29,8 +32,10 @@ def get_ohlcv(symbol, interval):
     data = requests.get(url).json()
     df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_", "_", "_", "_", "_"])
     df["close"] = df["close"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms').dt.tz_localize("UTC").dt.tz_convert(TIMEZONE)
-    return df[["timestamp", "close"]]
+    return df[["timestamp", "close", "high", "low"]]
 
 def calculate_indicators(df):
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD).mean()
@@ -45,78 +50,60 @@ def calculate_indicators(df):
     exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
     df["MACD"] = exp1 - exp2
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
-    df["CCI"] = (df["close"] - df["close"].rolling(20).mean()) / (0.015 * df["close"].rolling(20).std())
-    df["STOCH"] = ((df["close"] - df["close"].rolling(14).min()) / (df["close"].rolling(14).max() - df["close"].rolling(14).min())) * 100
-    df["ADX"] = df["close"].diff().abs().rolling(14).mean()
-    df["BB_MIDDLE"] = df["close"].rolling(20).mean()
-    df["BB_UPPER"] = df["BB_MIDDLE"] + 2 * df["close"].rolling(20).std()
-    df["BB_LOWER"] = df["BB_MIDDLE"] - 2 * df["close"].rolling(20).std()
+    df["CCI"] = (df["close"] - (df["high"] + df["low"] + df["close"]) / 3).rolling(CCI_PERIOD).mean()
+    df["ADX"] = abs(df["high"] - df["low"]).rolling(ADX_PERIOD).mean()
     return df
 
-def estimate_confidence(indicators):
+def estimate_confidence(df):
     score = 0
-    if indicators["RSI"] < 30 or indicators["RSI"] > 70:
+    if df["RSI"].iloc[-1] < 30 or df["RSI"].iloc[-1] > 70:
         score += 1
-    if (indicators["MACD"] - indicators["MACD_Signal"]) > 0:
+    if df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]:
         score += 1
-    if indicators["CCI"] < -100 or indicators["CCI"] > 100:
+    if df["CCI"].iloc[-1] > 100 or df["CCI"].iloc[-1] < -100:
         score += 1
-    if indicators["STOCH"] < 20 or indicators["STOCH"] > 80:
+    if df["ADX"].iloc[-1] > 25:
         score += 1
-    if indicators["close"] > indicators["EMA"]:
-        score += 1
-    if indicators["close"] > indicators["BB_UPPER"] or indicators["close"] < indicators["BB_LOWER"]:
-        score += 1
-    return int((score / 6) * 100)
+    return int(score * 25)  # Sur 100%
 
-def check_signal(multiframe_data):
-    call_conditions = 0
-    put_conditions = 0
-    for df in multiframe_data.values():
-        indicators = {
-            "RSI": df["RSI"].iloc[-1],
-            "EMA": df["EMA"].iloc[-1],
-            "MACD": df["MACD"].iloc[-1],
-            "MACD_Signal": df["MACD_Signal"].iloc[-1],
-            "CCI": df["CCI"].iloc[-1],
-            "STOCH": df["STOCH"].iloc[-1],
-            "close": df["close"].iloc[-1],
-            "BB_UPPER": df["BB_UPPER"].iloc[-1],
-            "BB_LOWER": df["BB_LOWER"].iloc[-1]
-        }
-        if indicators["RSI"] < 30 and indicators["MACD"] > indicators["MACD_Signal"] and indicators["close"] > indicators["EMA"]:
-            call_conditions += 1
-        elif indicators["RSI"] > 70 and indicators["MACD"] < indicators["MACD_Signal"] and indicators["close"] < indicators["EMA"]:
-            put_conditions += 1
+def check_signal(df):
+    rsi = df["RSI"].iloc[-1]
+    ema = df["EMA"].iloc[-1]
+    macd = df["MACD"].iloc[-1]
+    macd_signal = df["MACD_Signal"].iloc[-1]
+    close = df["close"].iloc[-1]
+    if rsi < 30 and close > ema and macd > macd_signal:
+        return "CALL ð"
+    elif rsi > 70 and close < ema and macd < macd_signal:
+        return "PUT ð"
+    return None
 
-    if call_conditions >= 2:
-        return "CALL ð", indicators
-    elif put_conditions >= 2:
-        return "PUT ð", indicators
-    return None, None
+async def send_signal(pair, signal_type, df):
+    confidence = estimate_confidence(df)
+    next_time = df["timestamp"].iloc[-1] + pd.Timedelta(minutes=1)
+    close = df["close"].iloc[-1]
+    active_signals[pair] = {"type": signal_type, "price": close, "time": next_time}
 
-async def send_signal(pair, signal_type, indicators, timestamp):
-    confidence = estimate_confidence(indicators)
     message = (
         f"ð¨ *Signal dÃ©tectÃ©* : {signal_type}
-
 "
         f"ð *Paire* : `{pair}`
 "
-        f"ð *Place le trade Ã * : {timestamp.strftime('%H:%M:%S')} (dans quelques minutes)
-
+        f"ð *Trade Ã  placer vers* : {next_time.strftime('%H:%M:%S')}
 "
-        f"ð *RSI* : {indicators['RSI']:.2f}
+        f"ð RSI : {df['RSI'].iloc[-1]:.2f}
 "
-        f"ð *EMA* : {indicators['EMA']:.2f}
+        f"ð EMA : {df['EMA'].iloc[-1]:.2f}
 "
-        f"ð *MACD* : {indicators['MACD']:.4f}
+        f"ð MACD : {df['MACD'].iloc[-1]:.4f}
 "
-        f"âï¸ *MACD Signal* : {indicators['MACD_Signal']:.4f}
+        f"âï¸ MACD Signal : {df['MACD_Signal'].iloc[-1]:.4f}
 "
-        f"ð° *Close* : {indicators['close']:.2f}
+        f"ð CCI : {df['CCI'].iloc[-1]:.2f}
 "
-        f"ð¯ *Taux de fiabilitÃ© estimÃ©* : {confidence}%"
+        f"ð ADX : {df['ADX'].iloc[-1]:.2f}
+"
+        f"ð *Taux de fiabilitÃ© estimÃ©* : {confidence}%"
     )
     await app.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
@@ -125,30 +112,48 @@ async def monitoring_loop():
     if is_running:
         return
     is_running = True
-    await app.bot.send_message(chat_id=CHAT_ID, text="ð¢ Bot dÃ©marrÃ© et en cours dâanalyse des marchÃ©s.")
+
+    await app.bot.send_message(chat_id=CHAT_ID, text="ð¢ Bot lancÃ© et en cours dâanalyse.")
 
     try:
         while is_running:
             for symbol in SYMBOLS:
                 try:
-                    multiframe_data = {}
+                    combined_df = None
                     for interval in INTERVALS:
                         df = get_ohlcv(symbol, interval)
                         df = calculate_indicators(df)
-                        multiframe_data[interval] = df
-                    signal, indicators = check_signal(multiframe_data)
-                    if signal:
-                        timestamp = list(multiframe_data.values())[0]["timestamp"].iloc[-1]
-                        last_key = f"{symbol}_{signal}_{timestamp}"
-                        if last_key != last_sent_signals.get(symbol):
-                            await send_signal(symbol, signal, indicators, timestamp)
-                            last_sent_signals[symbol] = last_key
+                        if interval == "1m":
+                            signal = check_signal(df)
+                            if signal:
+                                timestamp = df["timestamp"].iloc[-1].strftime('%Y-%m-%d %H:%M')
+                                last_key = f"{symbol}_{signal}_{timestamp}"
+                                if last_key != last_sent_signals.get(symbol):
+                                    await send_signal(symbol, signal, df)
+                                    last_sent_signals[symbol] = last_key
+                        if combined_df is None:
+                            combined_df = df
                 except Exception as e:
-                    print(f"Erreur sur {symbol} :", e)
+                    print(f"Erreur pour {symbol} :", e)
+
+            # VÃ©rifie les rÃ©sultats des signaux prÃ©cÃ©dents
+            for pair, data in list(active_signals.items()):
+                now = datetime.datetime.now(TIMEZONE)
+                if now >= data["time"] + pd.Timedelta(minutes=1):
+                    df = get_ohlcv(pair, "1m")
+                    last_close = df["close"].iloc[-1]
+                    result = "â *Signal gagnant*" if (
+                        (data["type"].startswith("CALL") and last_close > data["price"]) or
+                        (data["type"].startswith("PUT") and last_close < data["price"])
+                    ) else "â *Signal perdant*"
+                    await app.bot.send_message(chat_id=CHAT_ID, text=f"ð RÃ©sultat du signal {pair} : {result}", parse_mode="Markdown")
+                    del active_signals[pair]
+
             await asyncio.sleep(60)
     finally:
         is_running = False
 
+# Commandes Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("ð Stop", callback_data="stop")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
