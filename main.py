@@ -5,14 +5,12 @@ import pytz
 import pandas as pd
 import numpy as np
 from telegram import Bot
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import os
 
 # --- CONFIG ---
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
 CHAT_ID = "1091559539"
-SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT", "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
+SYMBOLS = ["BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT", "ETHUSDT",
+           "DASHUSDT", "BCHUSDT", "FILUSDT", "LTCUSDT", "YFIUSDT", "ZECUSDT"]
 INTERVAL = "1m"
 RSI_PERIOD = 14
 EMA_PERIOD = 9
@@ -21,20 +19,6 @@ MACD_SLOW = 26
 MACD_SIGNAL = 9
 TIMEZONE = pytz.timezone("Europe/Paris")
 bot = Bot(token=TOKEN)
-
-# --- Google Sheets ---
-def init_sheet():
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name("google_credentials.json", scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("Trading Signals").sheet1
-        return sheet
-    except Exception as e:
-        print("Erreur GSheet:", e)
-        return None
-
-sheet = init_sheet()
 
 # --- Binance OHLCV ---
 def get_ohlcv(symbol):
@@ -49,6 +33,7 @@ def get_ohlcv(symbol):
 # --- Indicateurs ---
 def calculate_indicators(df):
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD).mean()
+
     delta = df["close"].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -97,9 +82,6 @@ def send_signal(pair, signal_type, df):
 📆 Durée : 60s"""
 
     bot.send_message(chat_id=CHAT_ID, text=message)
-
-    if sheet:
-        sheet.append_row([str(datetime.datetime.now()), pair, signal_type, round(rsi, 2), round(ema, 2), round(macd, 4), round(macd_signal, 4), round(close, 2)])
 
 # --- Boucle principale ---
 def run():
