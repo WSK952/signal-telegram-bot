@@ -5,7 +5,7 @@ import pytz
 import pandas as pd
 import numpy as np
 from telegram import Bot
-import asyncio
+import os
 
 # --- CONFIG ---
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
@@ -47,7 +47,7 @@ def calculate_indicators(df):
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
     return df
 
-# --- Détection de signal ---
+# --- Signal ---
 def check_signal(df):
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -62,8 +62,8 @@ def check_signal(df):
     else:
         return None
 
-# --- Envoi du signal Telegram ---
-async def send_signal(pair, signal_type, df):
+# --- Envoyer signal ---
+def send_signal(pair, signal_type, df):
     timestamp = df["timestamp"].iloc[-1].strftime("%H:%M:%S")
     rsi = df["RSI"].iloc[-1]
     ema = df["EMA"].iloc[-1]
@@ -80,10 +80,11 @@ async def send_signal(pair, signal_type, df):
 🕒 Heure : {timestamp}
 📆 Durée : 60s"""
 
-    await bot.send_message(chat_id=CHAT_ID, text=message)
+    bot.send_message(chat_id=CHAT_ID, text=message)
 
 # --- Boucle principale ---
-async def run():
+def run():
+    bot.send_message(chat_id=CHAT_ID, text="✅ Bot de signaux lancé avec succès !")
     while True:
         for symbol in SYMBOLS:
             try:
@@ -91,11 +92,10 @@ async def run():
                 df = calculate_indicators(df)
                 signal = check_signal(df)
                 if signal:
-                    await send_signal(symbol, signal, df)
+                    send_signal(symbol, signal, df)
             except Exception as e:
                 print(f"Erreur sur {symbol} :", e)
-        await asyncio.sleep(60)
+        time.sleep(60)
 
-# --- Lancer le bot ---
 if __name__ == "__main__":
-    asyncio.run(run())
+    run()
