@@ -191,7 +191,16 @@ async def monitoring_loop():
     if is_running:
         return
     is_running = True
-    await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé et prêt à analyser les marchés.")
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📊 Bot démarré. Analyse des marchés en cours...",
+        reply_markup=reply_markup
+    )
+
+    asyncio.create_task(safe_monitoring_loop())
     try:
         while is_running:
             for symbol in SYMBOLS:
