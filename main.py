@@ -37,6 +37,120 @@ is_running = False
 last_sent_signals = {}
 active_signals = {}
 last_alert_time = datetime.datetime.now(TIMEZONE)
+# --- FONCTIONS ESSENTIELLES ---
+
+def get_ohlcv(symbol, interval):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
+    response = requests.get(url)
+    data = response.json()
+    df = pd.DataFrame(data, columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
+    ])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(TIMEZONE)
+    df = df.astype({
+        "open": float, "high": float, "low": float,
+        "close": float, "volume": float
+    })
+    return df
+
+def calculate_indicators(df):
+    df["EMA"] = df["close"].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df["EMA200"] = df["close"].ewm(span=EMA_TREND, adjust=False).mean()
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(RSI_PERIOD).mean()
+    avg_loss = loss.rolling(RSI_PERIOD).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+    exp1 = df["close"].ewm(span=MACD_FAST, adjust=False).mean()
+    exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
+    df["MACD"] = exp1 - exp2
+    df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    sma = tp.rolling(CCI_PERIOD).mean()
+    mad = tp.rolling(CCI_PERIOD).apply(lambda x: np.fabs(x - x.mean()).mean())
+    df["CCI"] = (tp - sma) / (0.015 * mad)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        abs(df["high"] - df["close"].shift()),
+        abs(df["low"] - df["close"].shift())
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(ADX_PERIOD).mean()
+    up_move = df["high"].diff()
+    down_move = df["low"].diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    plus_di = 100 * (pd.Series(plus_dm).rolling(ADX_PERIOD).sum() / atr)
+    minus_di = 100 * (pd.Series(minus_dm).rolling(ADX_PERIOD).sum() / atr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    df["ADX"] = dx.rolling(ADX_PERIOD).mean()
+    df["BB_MA"] = df["close"].rolling(BB_PERIOD).mean()
+    df["BB_STD"] = df["close"].rolling(BB_PERIOD).std()
+    df["BB_upper"] = df["BB_MA"] + 2 * df["BB_STD"]
+    df["BB_lower"] = df["BB_MA"] - 2 * df["BB_STD"]
+    df["STOCH"] = ((df["close"] - df["low"].rolling(STOCH_PERIOD).min()) /
+                   (df["high"].rolling(STOCH_PERIOD).max() - df["low"].rolling(STOCH_PERIOD).min())) * 100
+    return df
+
+def check_signal(df):
+    if df["RSI"].iloc[-1] < 30 and df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]:
+        return "CALL"
+    elif df["RSI"].iloc[-1] > 70 and df["MACD"].iloc[-1] < df["MACD_Signal"].iloc[-1]:
+        return "PUT"
+    else:
+        return None
+
+def estimate_confidence(df):
+    score = 0
+    reasons = []
+
+    if df["RSI"].iloc[-1] < 30 or df["RSI"].iloc[-1] > 70:
+        score += 15
+        reasons.append("RSI extrême")
+
+    if (df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]) or (df["MACD"].iloc[-1] < df["MACD_Signal"].iloc[-1]):
+        score += 15
+        reasons.append("Croisement MACD")
+
+    if df["ADX"].iloc[-1] > 20:
+        score += 10
+        reasons.append("Tendance forte (ADX)")
+
+    if df["volume"].iloc[-1] > df["volume"].rolling(VOLUME_PERIOD).mean().iloc[-1]:
+        score += 10
+        reasons.append("Volume élevé")
+
+    if df["CCI"].iloc[-1] > 100 or df["CCI"].iloc[-1] < -100:
+        score += 10
+        reasons.append("CCI extrême")
+
+    if df["close"].iloc[-1] > df["EMA200"].iloc[-1] and df["EMA"].iloc[-1] > df["EMA200"].iloc[-1]:
+        score += 10
+        reasons.append("Au-dessus de l’EMA200")
+
+    return min(score, 100), reasons
+
+async def send_result(symbol):
+    signal = active_signals.get(symbol)
+    if not signal:
+        return
+    now = datetime.datetime.now(TIMEZONE)
+    current_price = get_ohlcv(symbol, "1m")["close"].iloc[-1]
+    entry_price = signal["price"]
+    result = "✅ Gagné" if (
+        (signal["type"] == "CALL" and current_price > entry_price) or
+        (signal["type"] == "PUT" and current_price < entry_price)
+    ) else "❌ Perdu"
+
+    await app.bot.send_message(
+        chat_id=CHAT_ID,
+        text=f"📈 Résultat du signal `{symbol}` : {result}\n🎯 Prix d'entrée : {entry_price:.4f} | Prix actuel : {current_price:.4f}",
+        parse_mode="Markdown"
+    )
+    del active_signals[symbol]
 # --- ANALYSE MULTI-TIMEFRAME ---
 def get_multi_timeframe_data(symbol):
     data = {}
@@ -115,7 +229,7 @@ async def send_signal(symbol, signal, df, confidence, reasons):
         f"✅ *Critères validés* :\n{reason_txt}"
     )
     await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-    # --- CONFIRMATION PAR M1 AVANT TRADE ---
+ # --- CONFIRMATION PAR M1 AVANT TRADE ---
 async def confirm_signal_with_m1(symbol):
     if symbol not in active_signals:
         return
@@ -123,14 +237,16 @@ async def confirm_signal_with_m1(symbol):
     df_m1 = calculate_indicators(df_m1)
     signal_type = active_signals[symbol]["type"]
     confidence_m1, reasons_m1 = estimate_confidence(df_m1)
-    confirmation = None
 
-    if signal_type.startswith("CALL") and df_m1["RSI"].iloc[-1] < 30 and df_m1["MACD"].iloc[-1] > df_m1["MACD_Signal"].iloc[-1]:
-        confirmation = True
-    elif signal_type.startswith("PUT") and df_m1["RSI"].iloc[-1] > 70 and df_m1["MACD"].iloc[-1] < df_m1["MACD_Signal"].iloc[-1]:
-        confirmation = True
-    else:
-        confirmation = False
+    confirmation = (
+        signal_type.startswith("CALL")
+        and df_m1["RSI"].iloc[-1] < 30
+        and df_m1["MACD"].iloc[-1] > df_m1["MACD_Signal"].iloc[-1]
+    ) or (
+        signal_type.startswith("PUT")
+        and df_m1["RSI"].iloc[-1] > 70
+        and df_m1["MACD"].iloc[-1] < df_m1["MACD_Signal"].iloc[-1]
+    )
 
     if confirmation:
         msg = (
@@ -147,16 +263,19 @@ async def confirm_signal_with_m1(symbol):
             f"⚠️ Nous vous déconseillons de suivre ce signal."
         )
     await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-    # --- ENVOI DE RÉSUMÉ / AUCUN SIGNAL ---
+
+
+# --- ENVOI DE RÉSUMÉ / AUCUN SIGNAL ---
 last_report_time = datetime.datetime.now(TIMEZONE)
 
 async def send_periodic_report():
     global last_report_time
     now = datetime.datetime.now(TIMEZONE)
-    if (now - last_report_time).seconds >= 600:  # Toutes les 10 minutes
+    if (now - last_report_time).seconds >= 600:
         summary = "🔎 *Analyse périodique :*\nAucun signal fiable détecté sur les dernières paires analysées.\n"
         await app.bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
         last_report_time = now
+
 
 # --- AUTO-RESTART SI CRASH ---
 async def safe_monitoring_loop():
@@ -166,6 +285,7 @@ async def safe_monitoring_loop():
         except Exception as e:
             await app.bot.send_message(chat_id=CHAT_ID, text=f"🔁 *Redémarrage automatique après erreur :* {str(e)}")
             await asyncio.sleep(5)
+
 
 # --- SET THRESHOLD (pour futur amélioration) ---
 THRESHOLD = 60
@@ -179,18 +299,22 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Format invalide. Utilisez : /set_threshold 70")
 
+
 # --- AUTO-CLEAN DES VIEUX SIGNAUX ---
 def clean_old_signals():
     now = datetime.datetime.now(TIMEZONE)
-    for symbol in list(active_signals.keys()):
-        if (now - active_signals[symbol]["time"]).seconds > 180:
-            del active_signals[symbol]
-            # --- BOUCLE PRINCIPALE MONITORING ---
+    to_delete = [s for s, data in active_signals.items() if (now - data["time"]).seconds > 180]
+    for s in to_delete:
+        del active_signals[s]
+
+
+# --- BOUCLE PRINCIPALE MONITORING ---
 async def monitoring_loop():
     global is_running
     if is_running:
         return
     is_running = True
+    await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé et prêt à analyser les marchés.")
     try:
         while is_running:
             for symbol in SYMBOLS:
@@ -214,10 +338,11 @@ async def monitoring_loop():
                                 await send_signal(symbol, base_signal, m5, confidence, reasons)
                                 last_sent_signals[symbol] = key
 
-                    # Confirmation M1 avant le trade
+                    # Confirmation M1 avant exécution
                     if symbol in active_signals:
                         now = datetime.datetime.now(TIMEZONE)
                         exec_time = active_signals[symbol]["time"]
+
                         if now >= exec_time - datetime.timedelta(seconds=60) and not active_signals[symbol].get("confirmed"):
                             m1_signal = check_signal(m1)
                             if m1_signal == active_signals[symbol]["type"]:
@@ -226,7 +351,6 @@ async def monitoring_loop():
                                 await app.bot.send_message(chat_id=CHAT_ID, text=f"⚠️ M1 ne confirme PAS le signal `{symbol}`. Précaution recommandée.", parse_mode="Markdown")
                             active_signals[symbol]["confirmed"] = True
 
-                        # Retour 60s après exécution
                         if now >= exec_time + datetime.timedelta(seconds=60):
                             await send_result(symbol)
 
