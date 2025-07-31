@@ -280,7 +280,13 @@ async def daily_summary():
     except Exception as e:
         print(f"[ERREUR Résumé Journalier] {e}")
 if __name__ == "__main__":
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
-    scheduler.start()
-    app.run_polling()
+    async def main():
+        scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+        scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
+        scheduler.start()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await app.updater.idle()
+
+    asyncio.run(main())
