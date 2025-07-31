@@ -284,9 +284,10 @@ if __name__ == "__main__":
         scheduler = AsyncIOScheduler(timezone=TIMEZONE)
         scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
         scheduler.start()
+
         await app.initialize()
         await app.start()
-        await app.updater.start_polling()
-        await app.updater.idle()
+        await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !")
+        await app.run_polling()
 
     asyncio.run(main())
