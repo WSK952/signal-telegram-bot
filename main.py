@@ -267,7 +267,6 @@ async def monitoring_loop():
             clean_old_signals()
             await send_periodic_report()
             print("[INFO] Fin d’un tour de boucle, pause 10s")
-await asyncio.sleep(10)
             await asyncio.sleep(10)
     finally:
         is_running = False
