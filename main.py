@@ -241,14 +241,6 @@ async def monitoring_loop():
         is_running = False
 
 # --- COMMANDES TELEGRAM ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("📊 Bot démarré. Analyse des marchés en cours...", reply_markup=reply_markup)
-
-    # Lance la boucle de monitoring sans bloquer l'affichage du message
-    asyncio.create_task(safe_monitoring_loop())
-
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_running
     query = update.callback_query
@@ -256,20 +248,21 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "stop":
         is_running = False
         await query.edit_message_text("🛑 Bot arrêté avec succès.")
- async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
         "📊 Bot démarré. Analyse des marchés en cours...",
         reply_markup=reply_markup
     )
-
     asyncio.create_task(safe_monitoring_loop())
+
 # --- INIT ---
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(CommandHandler("set_threshold", set_threshold))
+
 # --- RÉSUMÉ JOURNALIER + TOP PAIRES VOLATILES ---
 async def daily_summary():
     try:
@@ -289,6 +282,7 @@ async def daily_summary():
         await app.bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
     except Exception as e:
         print(f"[ERREUR Résumé Journalier] {e}")
+
 if __name__ == "__main__":
     async def main():
         scheduler = AsyncIOScheduler(timezone=TIMEZONE)
