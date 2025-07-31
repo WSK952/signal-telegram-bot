@@ -246,7 +246,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("📊 Bot démarré. Analyse des marchés en cours...", reply_markup=reply_markup)
-    await safe_monitoring_loop()
+
+    # Lance la boucle de monitoring sans bloquer l'affichage du message
+    asyncio.create_task(safe_monitoring_loop())
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_running
