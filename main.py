@@ -196,5 +196,17 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("set_threshold", set_threshold))
 
         await app.run_polling()
+# --- COMMANDE DE TEST DE SIGNAL ---
+async def test_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbol = "BTCUSDT"
+    df = get_ohlcv(symbol, "1m")
+    df = calculate_indicators(df)
+    signal_type = "CALL"
+    confidence, reasons = estimate_confidence(df)
+    await send_signal(symbol, signal_type, df, confidence, reasons)
+    await update.message.reply_text("🚀 Faux signal envoyé avec succès.")
 
+# Ajoute ce handler juste avant app.run_polling()
+app.add_handler(CommandHandler("test_signal", test_signal))
+    
     asyncio.run(main())
