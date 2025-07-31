@@ -129,12 +129,10 @@ def estimate_confidence(df):
 
     if df["close"].iloc[-1] > df["EMA200"].iloc[-1] and df["EMA"].iloc[-1] > df["EMA200"].iloc[-1]:
         score += 10
-        reasons.append("Au-dessus de l’EMA200")
+        reasons.append("Au-dessus de l'EMA200")
 
     return min(score, 100), reasons
 
-# 🛑 LA SUITE CONTINUE DANS LE PROCHAIN MESSAGE 🛑  
-(à cause de la limite de caractères, je t’envoie la suite maintenant)
 # --- COMMANDES TELEGRAM ---
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_running
