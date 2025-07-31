@@ -37,8 +37,8 @@ is_running = False
 last_sent_signals = {}
 active_signals = {}
 last_alert_time = datetime.datetime.now(TIMEZONE)
-# --- FONCTIONS ESSENTIELLES ---
 
+# --- FONCTIONS ESSENTIELLES ---
 def get_ohlcv(symbol, interval):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
     response = requests.get(url)
@@ -133,237 +133,8 @@ def estimate_confidence(df):
 
     return min(score, 100), reasons
 
-async def send_result(symbol):
-    signal = active_signals.get(symbol)
-    if not signal:
-        return
-    now = datetime.datetime.now(TIMEZONE)
-    current_price = get_ohlcv(symbol, "1m")["close"].iloc[-1]
-    entry_price = signal["price"]
-    result = "✅ Gagné" if (
-        (signal["type"] == "CALL" and current_price > entry_price) or
-        (signal["type"] == "PUT" and current_price < entry_price)
-    ) else "❌ Perdu"
-
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text=f"📈 Résultat du signal `{symbol}` : {result}\n🎯 Prix d'entrée : {entry_price:.4f} | Prix actuel : {current_price:.4f}",
-        parse_mode="Markdown"
-    )
-    del active_signals[symbol]
-# --- ANALYSE MULTI-TIMEFRAME ---
-def get_multi_timeframe_data(symbol):
-    data = {}
-    for tf in ["1m", "5m", "15m"]:
-        df = get_ohlcv(symbol, tf)
-        df = calculate_indicators(df)
-        data[tf] = df
-    return data
-
-def combine_signal_mtf(data):
-    sig_5m = check_signal(data["5m"])
-    sig_15m = check_signal(data["15m"])
-    if sig_5m and sig_15m and sig_5m == sig_15m:
-        return sig_5m
-    return None
-
-# --- FILTRE SUPPORT / RÉSISTANCE ---
-def is_near_support_resistance(df):
-    last_close = df["close"].iloc[-1]
-    recent_high = df["high"].rolling(20).max().iloc[-1]
-    recent_low = df["low"].rolling(20).min().iloc[-1]
-    seuil = (recent_high - recent_low) * 0.05
-    near_resistance = abs(last_close - recent_high) < seuil
-    near_support = abs(last_close - recent_low) < seuil
-    return near_resistance or near_support
-
-# --- MESSAGE DE CONFIRMATION OU D'AVERTISSEMENT ---
-async def confirm_with_m1(symbol, main_signal, active_df):
-    df_m1 = get_ohlcv(symbol, "1m")
-    df_m1 = calculate_indicators(df_m1)
-    confirm_signal = check_signal(df_m1)
-    confidence, reasons = estimate_confidence(df_m1)
-
-    if confirm_signal == main_signal:
-        await app.bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"🧠 *Confirmation M1 reçue pour* `{symbol}`\n✅ Signal confirmé.\n🔒 Fiabilité ajustée : *{confidence}%*",
-            parse_mode="Markdown"
-        )
-    else:
-        await app.bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"⚠️ *Attention M1 n'a pas confirmé le signal sur* `{symbol}`\n❌ Fiabilité diminuée : *{confidence}%*\n💡 Réfléchis avant d’entrer en position.",
-            parse_mode="Markdown"
-        )
-        # --- SIGNAL + ANTI-DOUBLON + TIMER ---
-from collections import deque
-signal_history = {}
-
-async def send_signal(symbol, signal, df, confidence, reasons):
-    now = datetime.datetime.now(TIMEZONE)
-    if symbol not in signal_history:
-        signal_history[symbol] = deque(maxlen=10)
-    for entry in signal_history[symbol]:
-        if entry["type"] == signal and (now - entry["time"]).total_seconds() < 300:
-            return  # Signal déjà envoyé récemment
-    signal_history[symbol].append({"type": signal, "time": now})
-
-    next_time = df["timestamp"].iloc[-1] + pd.Timedelta(minutes=1)
-    delay = (next_time - now).seconds
-    timer_msg = f"⏳ *Place ton trade dans* : {delay} sec"
-
-    reason_txt = "\n".join([f"- {r}" for r in reasons])
-    close = df["close"].iloc[-1]
-    active_signals[symbol] = {"type": signal, "price": close, "time": next_time}
-
-    msg = (
-        f"🚨 *Signal détecté* : {signal}\n"
-        f"📊 *Paire* : `{symbol}`\n"
-        f"⏰ *Trade à* : {next_time.strftime('%H:%M:%S')}\n"
-        f"{timer_msg}\n\n"
-        f"📉 RSI : {df['RSI'].iloc[-1]:.2f} | EMA : {df['EMA'].iloc[-1]:.2f} | EMA200 : {df['EMA200'].iloc[-1]:.2f}\n"
-        f"📈 MACD : {df['MACD'].iloc[-1]:.4f} | 🔁 Signal : {df['MACD_Signal'].iloc[-1]:.4f}\n"
-        f"📏 CCI : {df['CCI'].iloc[-1]:.2f} | ADX : {df['ADX'].iloc[-1]:.2f} | 🔊 Volume : {df['volume'].iloc[-1]:.2f}\n\n"
-        f"🧠 *Fiabilité estimée* : {confidence}%\n"
-        f"✅ *Critères validés* :\n{reason_txt}"
-    )
-    await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
- # --- CONFIRMATION PAR M1 AVANT TRADE ---
-async def confirm_signal_with_m1(symbol):
-    if symbol not in active_signals:
-        return
-    df_m1 = get_ohlcv(symbol, "1m")
-    df_m1 = calculate_indicators(df_m1)
-    signal_type = active_signals[symbol]["type"]
-    confidence_m1, reasons_m1 = estimate_confidence(df_m1)
-
-    confirmation = (
-        signal_type.startswith("CALL")
-        and df_m1["RSI"].iloc[-1] < 30
-        and df_m1["MACD"].iloc[-1] > df_m1["MACD_Signal"].iloc[-1]
-    ) or (
-        signal_type.startswith("PUT")
-        and df_m1["RSI"].iloc[-1] > 70
-        and df_m1["MACD"].iloc[-1] < df_m1["MACD_Signal"].iloc[-1]
-    )
-
-    if confirmation:
-        msg = (
-            f"🔁 *Confirmation M1* pour `{symbol}`\n"
-            f"✅ M1 confirme le signal {signal_type}\n"
-            f"📊 Nouvelle fiabilité : {confidence_m1}%\n"
-            f"🧠 Raisons :\n" + "\n".join([f"- {r}" for r in reasons_m1])
-        )
-    else:
-        msg = (
-            f"⚠️ *Alerte* : `{symbol}`\n"
-            f"❌ M1 *ne confirme pas* le signal {signal_type}\n"
-            f"📉 Fiabilité revue à : {confidence_m1}%\n"
-            f"⚠️ Nous vous déconseillons de suivre ce signal."
-        )
-    await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-
-
-# --- ENVOI DE RÉSUMÉ / AUCUN SIGNAL ---
-last_report_time = datetime.datetime.now(TIMEZONE)
-
-async def send_periodic_report():
-    global last_report_time
-    now = datetime.datetime.now(TIMEZONE)
-    if (now - last_report_time).seconds >= 600:
-        summary = "🔎 *Analyse périodique :*\nAucun signal fiable détecté sur les dernières paires analysées.\n"
-        await app.bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
-        last_report_time = now
-
-
-# --- AUTO-RESTART SI CRASH ---
-async def safe_monitoring_loop():
-    while True:
-        try:
-            await monitoring_loop()
-        except Exception as e:
-            await app.bot.send_message(chat_id=CHAT_ID, text=f"🔁 *Redémarrage automatique après erreur :* {str(e)}")
-            await asyncio.sleep(5)
-
-
-# --- SET THRESHOLD (pour futur amélioration) ---
-THRESHOLD = 60
-
-async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global THRESHOLD
-    try:
-        new_val = int(context.args[0])
-        THRESHOLD = new_val
-        await update.message.reply_text(f"🔧 Nouveau seuil de fiabilité : {THRESHOLD}%")
-    except:
-        await update.message.reply_text("❌ Format invalide. Utilisez : /set_threshold 70")
-
-
-# --- AUTO-CLEAN DES VIEUX SIGNAUX ---
-def clean_old_signals():
-    now = datetime.datetime.now(TIMEZONE)
-    to_delete = [s for s, data in active_signals.items() if (now - data["time"]).seconds > 180]
-    for s in to_delete:
-        del active_signals[s]
-
-
-# --- BOUCLE PRINCIPALE MONITORING ---
-async def monitoring_loop():
-    global is_running
-    if is_running:
-        return
-    is_running = True
-    await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé et prêt à analyser les marchés.")
-    try:
-        while is_running:
-            for symbol in SYMBOLS:
-                try:
-                    m1 = get_ohlcv(symbol, "1m")
-                    m5 = get_ohlcv(symbol, "5m")
-                    m15 = get_ohlcv(symbol, "15m")
-
-                    m1 = calculate_indicators(m1)
-                    m5 = calculate_indicators(m5)
-                    m15 = calculate_indicators(m15)
-
-                    base_signal = check_signal(m5)
-                    confirm_signal = check_signal(m15)
-
-                    if base_signal and confirm_signal and base_signal == confirm_signal:
-                        key = f"{symbol}_{base_signal}_{m5['timestamp'].iloc[-1]}"
-                        if key != last_sent_signals.get(symbol):
-                            confidence, reasons = estimate_confidence(m5)
-                            if confidence >= THRESHOLD:
-                                await send_signal(symbol, base_signal, m5, confidence, reasons)
-                                last_sent_signals[symbol] = key
-
-                    # Confirmation M1 avant exécution
-                    if symbol in active_signals:
-                        now = datetime.datetime.now(TIMEZONE)
-                        exec_time = active_signals[symbol]["time"]
-
-                        if now >= exec_time - datetime.timedelta(seconds=60) and not active_signals[symbol].get("confirmed"):
-                            m1_signal = check_signal(m1)
-                            if m1_signal == active_signals[symbol]["type"]:
-                                await app.bot.send_message(chat_id=CHAT_ID, text=f"✅ M1 confirme le signal `{symbol}`. Confiance renforcée.", parse_mode="Markdown")
-                            else:
-                                await app.bot.send_message(chat_id=CHAT_ID, text=f"⚠️ M1 ne confirme PAS le signal `{symbol}`. Précaution recommandée.", parse_mode="Markdown")
-                            active_signals[symbol]["confirmed"] = True
-
-                        if now >= exec_time + datetime.timedelta(seconds=60):
-                            await send_result(symbol)
-
-                except Exception as e:
-                    print(f"[ERREUR] {symbol} : {e}")
-
-            clean_old_signals()
-            await send_periodic_report()
-            await asyncio.sleep(10)
-
-    finally:
-        is_running = False
-
+# 🛑 LA SUITE CONTINUE DANS LE PROCHAIN MESSAGE 🛑  
+(à cause de la limite de caractères, je t’envoie la suite maintenant)
 # --- COMMANDES TELEGRAM ---
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_running
@@ -412,12 +183,20 @@ if __name__ == "__main__":
         await app.initialize()
         await app.start()
 
-        # 👇 Handlers bien placés à l’intérieur de main()
+        # Bouton STOP ajouté ici 👇
+        keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await app.bot.send_message(
+            chat_id=CHAT_ID,
+            text="✅ Bot lancé avec succès et prêt à analyser les marchés !",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(button))
         app.add_handler(CommandHandler("set_threshold", set_threshold))
 
-        await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !")
         await app.run_polling()
 
     asyncio.run(main())
