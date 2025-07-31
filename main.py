@@ -6,6 +6,7 @@ import numpy as np
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import traceback
 
 # --- CONFIGURATION ---
@@ -259,6 +260,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(CommandHandler("set_threshold", set_threshold))
+# --- RÉSUMÉ JOURNALIER + TOP PAIRES VOLATILES ---
+async def daily_summary():
+    try:
+        summary = "📅 *Résumé Journalier - Performances du Marché*\n\n"
+        top_pairs = []
+        for symbol in SYMBOLS:
+            df = get_ohlcv(symbol, "15m")
+            df = calculate_indicators(df)
+            last_volatility = (df["high"] - df["low"]).mean()
+            top_pairs.append((symbol, last_volatility))
 
+        top_pairs.sort(key=lambda x: x[1], reverse=True)
+        summary += "🔥 *Top paires les plus volatiles :*\n"
+        for s, vol in top_pairs[:5]:
+            summary += f"- `{s}` : Volatilité moyenne ~ {vol:.4f}\n"
+
+        await app.bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
+    except Exception as e:
+        print(f"[ERREUR Résumé Journalier] {e}")
 if __name__ == "__main__":
+    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+    scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
+    scheduler.start()
     app.run_polling()
