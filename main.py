@@ -155,7 +155,9 @@ async def send_signal(symbol, signal, df, confidence, reasons):
         f"✅ *Critères validés* :\n{reason_txt}"
     )
     await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-    async def confirm_signal_with_m1(symbol):
+    
+# -------- CONFIRMATION M1 --------
+async def confirm_signal_with_m1(symbol):
     if symbol not in active_signals:
         return
     df_m1 = get_ohlcv(symbol, "1m")
