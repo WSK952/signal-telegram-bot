@@ -233,6 +233,7 @@ async def monitoring_loop():
     if is_running:
         return
     is_running = True
+    print("[INFO] Début boucle monitoring")
     await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé et prêt à analyser les marchés.")
     try:
         while is_running:
@@ -265,6 +266,8 @@ async def monitoring_loop():
                     print(f"[ERREUR] {symbol} : {e}")
             clean_old_signals()
             await send_periodic_report()
+            print("[INFO] Fin d’un tour de boucle, pause 10s")
+await asyncio.sleep(10)
             await asyncio.sleep(10)
     finally:
         is_running = False
