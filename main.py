@@ -382,11 +382,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     asyncio.create_task(safe_monitoring_loop())
 
-# --- INIT ---
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button))
-app.add_handler(CommandHandler("set_threshold", set_threshold))
-
 # --- RÉSUMÉ JOURNALIER + TOP PAIRES VOLATILES ---
 async def daily_summary():
     try:
@@ -407,6 +402,7 @@ async def daily_summary():
     except Exception as e:
         print(f"[ERREUR Résumé Journalier] {e}")
 
+# --- MAIN ---
 if __name__ == "__main__":
     async def main():
         scheduler = AsyncIOScheduler(timezone=TIMEZONE)
@@ -415,6 +411,12 @@ if __name__ == "__main__":
 
         await app.initialize()
         await app.start()
+
+        # 👇 Handlers bien placés à l’intérieur de main()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CallbackQueryHandler(button))
+        app.add_handler(CommandHandler("set_threshold", set_threshold))
+
         await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !")
         await app.run_polling()
 
