@@ -45,7 +45,11 @@ active_signals = {}
 signal_history = {}
 last_alert_time = datetime.datetime.now(TIMEZONE)
 last_report_time = datetime.datetime.now(TIMEZONE)
-# --- FONCTIONS INDICATEURS ---
+
+def get_stop_button():
+    keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
+    return InlineKeyboardMarkup(keyboard)
+
 def get_ohlcv(symbol, interval):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
@@ -77,6 +81,7 @@ def calculate_indicators(df):
     exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
     df["MACD"] = exp1 - exp2
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
+
     tp = (df["high"] + df["low"] + df["close"]) / 3
     sma = tp.rolling(CCI_PERIOD).mean()
     mad = tp.rolling(CCI_PERIOD).apply(lambda x: np.fabs(x - x.mean()).mean())
@@ -120,6 +125,7 @@ def estimate_confidence(df):
     if (df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]) or (df["MACD"].iloc[-1] < df["MACD_Signal"].iloc[-1]):
         score += 15
         reasons.append("Croisement MACD")
+    
     if df["ADX"].iloc[-1] > 20:
         score += 10
         reasons.append("Tendance forte (ADX)")
@@ -133,7 +139,7 @@ def estimate_confidence(df):
         score += 10
         reasons.append("Au-dessus de l’EMA200")
     return min(score, 100), reasons
-    
+
 async def send_signal(symbol, signal, df, confidence, reasons):
     now = datetime.datetime.now(TIMEZONE)
     if symbol not in signal_history:
@@ -185,7 +191,7 @@ async def confirm_signal_with_m1(symbol):
             and df_m1["RSI"].iloc[-1] > 70
             and df_m1["MACD"].iloc[-1] < df_m1["MACD_Signal"].iloc[-1]
         )
-
+    
         if confirmation:
             msg = (
                 f"🔁 *Confirmation M1* pour `{symbol}`\n"
@@ -204,6 +210,18 @@ async def confirm_signal_with_m1(symbol):
         await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
     except Exception as e:
         print(f"[ERREUR Confirm M1] {symbol} : {e}")
+
+async def ping_binance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        df = get_ohlcv("BTCUSDT", "1m")
+        if df.empty:
+            raise Exception("Données vides")
+        last_close = df['close'].iloc[-1]
+        await update.message.reply_text(
+            f"✅ Connexion Binance réussie.\nDernier prix BTCUSDT (1m) : {last_close:.2f}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erreur connexion Binance : {e}")
 
 async def send_result(symbol):
     try:
@@ -248,7 +266,7 @@ async def send_periodic_report():
             last_report_time = now
     except Exception as e:
         print(f"[ERREUR Report périodique] : {e}")
-        
+
 async def safe_monitoring_loop():
     while True:
         try:
@@ -311,7 +329,7 @@ async def monitoring_loop():
             await asyncio.sleep(10)
     finally:
         is_running = False
-
+        
 # --- COMMANDES TELEGRAM ---
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_running
@@ -320,11 +338,29 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "stop":
         is_running = False
         await query.edit_message_text("🛑 Bot arrêté avec succès.")
+    elif query.data == "analyse":
+        await update.callback_query.message.reply_text("🔍 Lancement d’une analyse manuelle...")
+        await manual_analysis()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🛑 Stop", callback_data="stop")]]
+    keyboard = [
+        [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
+        [InlineKeyboardButton("📊 Analyse", callback_data="analyse")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
+    help_message = (
+        "📚 *Commandes disponibles :*\n\n"
+        "/start - Démarrer le bot (relance la boucle)\n"
+        "/analyse - Analyse manuelle immédiate\n"
+        "/verifie - Vérifie l’état du bot\n"
+        "/set_threshold 70 - Change le seuil de fiabilité\n"
+        "/ping_binance - Vérifie la connexion à Binance\n"
+        "🛑 *Stop* - Arrête toutes les boucles"
+    )
+
     await update.message.reply_text("📊 Bot démarré. Analyse des marchés en cours...", reply_markup=reply_markup)
+    await update.message.reply_text(help_message, parse_mode="Markdown")
     asyncio.create_task(safe_monitoring_loop())
 
 async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -335,6 +371,36 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔧 Nouveau seuil de fiabilité : {THRESHOLD}%")
     except:
         await update.message.reply_text("❌ Format invalide. Utilisez : /set_threshold 70")
+
+async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Lancement d’une analyse manuelle...")
+    await manual_analysis()
+
+async def verifie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    status = "✅ *Statut des boucles :*\n"
+    status += f"- Monitoring actif : {'🟢 Oui' if is_running else '🔴 Non'}\n"
+    status += f"- Dernier report périodique : `{last_report_time.strftime('%H:%M:%S')}`\n"
+    status += f"- Dernier signal global : `{max([s['time'] for h in signal_history.values() for s in h], default='Aucun')}`\n"
+    await update.message.reply_text(status, parse_mode="Markdown")
+    
+async def manual_analysis():
+    try:
+        for symbol in SYMBOLS:
+            m5 = get_ohlcv(symbol, "5m")
+            m15 = get_ohlcv(symbol, "15m")
+
+            m5 = calculate_indicators(m5)
+            m15 = calculate_indicators(m15)
+
+            signal = check_signal(m5)
+            confirm = check_signal(m15)
+
+            if signal and confirm and signal == confirm:
+                confidence, reasons = estimate_confidence(m5)
+                if confidence >= THRESHOLD:
+                    await send_signal(symbol, signal, m5, confidence, reasons)
+    except Exception as e:
+        print(f"[ERREUR Analyse manuelle] {e}")
 
 # --- RÉSUMÉ JOURNALIER ---
 async def daily_summary():
@@ -367,8 +433,29 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(button))
         app.add_handler(CommandHandler("set_threshold", set_threshold))
+        app.add_handler(CommandHandler("analyse", analyse))
+        app.add_handler(CommandHandler("verifie", verifie))
+        app.add_handler(CommandHandler("ping_binance", ping_binance))
 
-        await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !", parse_mode="Markdown")
-        await app.run_polling()
+        await app.bot.send_message(
+    chat_id=CHAT_ID,
+    text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
+    reply_markup=get_stop_button(),
+    parse_mode="Markdown"
+)
+
+await app.bot.send_message(
+    chat_id=CHAT_ID,
+    text=(
+        "📚 *Commandes disponibles :*\n\n"
+        "/start - Démarrer le bot (relance la boucle)\n"
+        "/analyse - Analyse manuelle immédiate\n"
+        "/verifie - Vérifie l’état du bot\n"
+        "/set_threshold 70 - Change le seuil de fiabilité\n"
+        "/ping_binance - Vérifie la connexion à Binance\n"
+        "🛑 *Stop* - Arrête toutes les boucles"
+    ),
+    parse_mode="Markdown"
+)
 
     asyncio.run(main())
