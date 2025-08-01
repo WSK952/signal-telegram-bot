@@ -461,7 +461,6 @@ if __name__ == "__main__":
             parse_mode="Markdown"
         )
         await app.bot.send_message(chat_id=CHAT_ID, text=help_message, parse_mode="Markdown")
-        await app.start()
         await app.run_polling()
 
     asyncio.run(main())
