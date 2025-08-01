@@ -426,6 +426,8 @@ import nest_asyncio
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+nest_asyncio.apply()
+
 async def main():
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
     scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
@@ -437,7 +439,7 @@ async def main():
     app.add_handler(CommandHandler("analyse", analyse))
     app.add_handler(CommandHandler("verifie", verifie))
     app.add_handler(CommandHandler("pingbinance", ping_binance))
-    app.add_handler(CommandHandler("ping_binance", ping_binance))  # alias
+    app.add_handler(CommandHandler("ping_binance", ping_binance))
 
     await app.initialize()
 
@@ -465,9 +467,11 @@ async def main():
     )
     await app.bot.send_message(chat_id=CHAT_ID, text=help_message, parse_mode="Markdown")
 
-    await app.start()
+    # 🟢 Ce seul appel suffit, il démarre tout : polling + loop
     await app.run_polling()
 
+# ❗ Ne pas faire asyncio.run(main()) ici
 if __name__ == "__main__":
-    nest_asyncio.apply()
-    asyncio.run(main())
+    # Juste lancer la tâche dans la boucle déjà existante
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
