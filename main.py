@@ -45,21 +45,25 @@ active_signals = {}
 signal_history = {}
 last_alert_time = datetime.datetime.now(TIMEZONE)
 last_report_time = datetime.datetime.now(TIMEZONE)
-
 # --- FONCTIONS INDICATEURS ---
 def get_ohlcv(symbol, interval):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
-    data = requests.get(url).json()
-    df = pd.DataFrame(data, columns=[
-        "timestamp", "open", "high", "low", "close", "volume",
-        "close_time", "quote_asset_volume", "number_of_trades",
-        "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
-    ])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(TIMEZONE)
-    df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-    return df
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=100"
+        data = requests.get(url).json()
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "number_of_trades",
+            "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
+        ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(TIMEZONE)
+        df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+        return df
+    except Exception as e:
+        print(f"[ERREUR OHLCV] {symbol}-{interval} : {e}")
+        return pd.DataFrame()
 
 def calculate_indicators(df):
+    if df.empty: return df
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD, adjust=False).mean()
     df["EMA200"] = df["close"].ewm(span=EMA_TREND, adjust=False).mean()
     delta = df["close"].diff()
@@ -100,6 +104,7 @@ def calculate_indicators(df):
     return df
 
 def check_signal(df):
+    if df.empty: return None
     if df["RSI"].iloc[-1] < 30 and df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]:
         return "CALL"
     elif df["RSI"].iloc[-1] > 70 and df["MACD"].iloc[-1] < df["MACD_Signal"].iloc[-1]:
@@ -128,14 +133,16 @@ def estimate_confidence(df):
         score += 10
         reasons.append("Au-dessus de l’EMA200")
     return min(score, 100), reasons
-
+    
 async def send_signal(symbol, signal, df, confidence, reasons):
     now = datetime.datetime.now(TIMEZONE)
     if symbol not in signal_history:
         signal_history[symbol] = deque(maxlen=10)
+
     for entry in signal_history[symbol]:
         if entry["type"] == signal and (now - entry["time"]).total_seconds() < 300:
             return
+
     signal_history[symbol].append({"type": signal, "time": now})
     next_time = df["timestamp"].iloc[-1] + pd.Timedelta(minutes=1)
     delay = (next_time - now).seconds
@@ -143,6 +150,7 @@ async def send_signal(symbol, signal, df, confidence, reasons):
     reason_txt = "\n".join([f"- {r}" for r in reasons])
     close = df["close"].iloc[-1]
     active_signals[symbol] = {"type": signal, "price": close, "time": next_time}
+
     msg = (
         f"🚨 *Signal détecté* : {signal}\n"
         f"📊 *Paire* : `{symbol}`\n"
@@ -154,77 +162,99 @@ async def send_signal(symbol, signal, df, confidence, reasons):
         f"🧠 *Fiabilité estimée* : {confidence}%\n"
         f"✅ *Critères validés* :\n{reason_txt}"
     )
+
     await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-    
-# -------- CONFIRMATION M1 --------
+
 async def confirm_signal_with_m1(symbol):
-    if symbol not in active_signals:
-        return
-    df_m1 = get_ohlcv(symbol, "1m")
-    df_m1 = calculate_indicators(df_m1)
-    signal_type = active_signals[symbol]["type"]
-    confidence_m1, reasons_m1 = estimate_confidence(df_m1)
-    confirmation = (
-        signal_type == "CALL"
-        and df_m1["RSI"].iloc[-1] < 30
-        and df_m1["MACD"].iloc[-1] > df_m1["MACD_Signal"].iloc[-1]
-    ) or (
-        signal_type == "PUT"
-        and df_m1["RSI"].iloc[-1] > 70
-        and df_m1["MACD"].iloc[-1] < df_m1["MACD_Signal"].iloc[-1]
-    )
-    if confirmation:
-        msg = (
-            f"🔁 *Confirmation M1* pour `{symbol}`\n"
-            f"✅ M1 confirme le signal {signal_type}\n"
-            f"📊 Nouvelle fiabilité : {confidence_m1}%\n"
-            f"🧠 Raisons :\n" + "\n".join([f"- {r}" for r in reasons_m1])
+    try:
+        if symbol not in active_signals:
+            return
+
+        df_m1 = get_ohlcv(symbol, "1m")
+        df_m1 = calculate_indicators(df_m1)
+
+        signal_type = active_signals[symbol]["type"]
+        confidence_m1, reasons_m1 = estimate_confidence(df_m1)
+
+        confirmation = (
+            signal_type == "CALL"
+            and df_m1["RSI"].iloc[-1] < 30
+            and df_m1["MACD"].iloc[-1] > df_m1["MACD_Signal"].iloc[-1]
+        ) or (
+            signal_type == "PUT"
+            and df_m1["RSI"].iloc[-1] > 70
+            and df_m1["MACD"].iloc[-1] < df_m1["MACD_Signal"].iloc[-1]
         )
-    else:
-        msg = (
-            f"⚠️ *Alerte* : `{symbol}`\n"
-            f"❌ M1 *ne confirme pas* le signal {signal_type}\n"
-            f"📉 Fiabilité revue à : {confidence_m1}%\n"
-            f"⚠️ Nous vous déconseillons de suivre ce signal."
-        )
-    await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+
+        if confirmation:
+            msg = (
+                f"🔁 *Confirmation M1* pour `{symbol}`\n"
+                f"✅ M1 confirme le signal {signal_type}\n"
+                f"📊 Nouvelle fiabilité : {confidence_m1}%\n"
+                f"🧠 Raisons :\n" + "\n".join([f"- {r}" for r in reasons_m1])
+            )
+        else:
+            msg = (
+                f"⚠️ *Alerte* : `{symbol}`\n"
+                f"❌ M1 *ne confirme pas* le signal {signal_type}\n"
+                f"📉 Fiabilité revue à : {confidence_m1}%\n"
+                f"⚠️ Nous vous déconseillons de suivre ce signal."
+            )
+
+        await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+    except Exception as e:
+        print(f"[ERREUR Confirm M1] {symbol} : {e}")
 
 async def send_result(symbol):
-    signal = active_signals.get(symbol)
-    if not signal:
-        return
-    df = get_ohlcv(symbol, "1m")
-    current_price = df["close"].iloc[-1]
-    entry_price = signal["price"]
-    result = "✅ Gagné" if (
-        (signal["type"] == "CALL" and current_price > entry_price) or
-        (signal["type"] == "PUT" and current_price < entry_price)
-    ) else "❌ Perdu"
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text=f"📈 Résultat du signal `{symbol}` : {result}\n🎯 Prix d'entrée : {entry_price:.4f} | Prix actuel : {current_price:.4f}",
-        parse_mode="Markdown"
-    )
-    del active_signals[symbol]
+    try:
+        signal = active_signals.get(symbol)
+        if not signal:
+            return
+
+        df = get_ohlcv(symbol, "1m")
+        current_price = df["close"].iloc[-1]
+        entry_price = signal["price"]
+
+        result = "✅ Gagné" if (
+            (signal["type"] == "CALL" and current_price > entry_price) or
+            (signal["type"] == "PUT" and current_price < entry_price)
+        ) else "❌ Perdu"
+
+        await app.bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"📈 Résultat du signal `{symbol}` : {result}\n🎯 Prix d'entrée : {entry_price:.4f} | Prix actuel : {current_price:.4f}",
+            parse_mode="Markdown"
+        )
+
+        del active_signals[symbol]
+    except Exception as e:
+        print(f"[ERREUR Résultat] {symbol} : {e}")
 
 def clean_old_signals():
-    now = datetime.datetime.now(TIMEZONE)
-    to_delete = [s for s, data in active_signals.items() if (now - data["time"]).seconds > 180]
-    for s in to_delete:
-        del active_signals[s]
+    try:
+        now = datetime.datetime.now(TIMEZONE)
+        to_delete = [s for s, data in active_signals.items() if (now - data["time"]).seconds > 180]
+        for s in to_delete:
+            del active_signals[s]
+    except Exception as e:
+        print(f"[ERREUR Nettoyage signaux] {e}")
 
 async def send_periodic_report():
     global last_report_time
-    now = datetime.datetime.now(TIMEZONE)
-    if (now - last_report_time).seconds >= 600:
-        await app.bot.send_message(chat_id=CHAT_ID, text="🔎 *Analyse périodique :*\nAucun signal fiable détecté récemment.", parse_mode="Markdown")
-        last_report_time = now
-
+    try:
+        now = datetime.datetime.now(TIMEZONE)
+        if (now - last_report_time).total_seconds() >= 600:
+            await app.bot.send_message(chat_id=CHAT_ID, text="🔎 *Analyse périodique :*\nAucun signal fiable détecté récemment.", parse_mode="Markdown")
+            last_report_time = now
+    except Exception as e:
+        print(f"[ERREUR Report périodique] : {e}")
+        
 async def safe_monitoring_loop():
     while True:
         try:
             await monitoring_loop()
         except Exception as e:
+            print(f"[SAFE LOOP ERROR] Redémarrage après exception : {e}")
             await app.bot.send_message(chat_id=CHAT_ID, text=f"🔁 *Redémarrage automatique après erreur :* {str(e)}")
             await asyncio.sleep(5)
 
@@ -242,11 +272,14 @@ async def monitoring_loop():
                     m1 = get_ohlcv(symbol, "1m")
                     m5 = get_ohlcv(symbol, "5m")
                     m15 = get_ohlcv(symbol, "15m")
+
                     m1 = calculate_indicators(m1)
                     m5 = calculate_indicators(m5)
                     m15 = calculate_indicators(m15)
+
                     base_signal = check_signal(m5)
                     confirm = check_signal(m15)
+
                     if base_signal and confirm and base_signal == confirm:
                         key = f"{symbol}_{base_signal}_{m5['timestamp'].iloc[-1]}"
                         if key != last_sent_signals.get(symbol):
@@ -254,19 +287,27 @@ async def monitoring_loop():
                             if confidence >= THRESHOLD:
                                 await send_signal(symbol, base_signal, m5, confidence, reasons)
                                 last_sent_signals[symbol] = key
+
                     if symbol in active_signals:
                         now = datetime.datetime.now(TIMEZONE)
                         exec_time = active_signals[symbol]["time"]
-                        if now >= exec_time - datetime.timedelta(seconds=60) and not active_signals[symbol].get("confirmed"):
-                            await confirm_signal_with_m1(symbol)
-                            active_signals[symbol]["confirmed"] = True
-                        if now >= exec_time + datetime.timedelta(seconds=60):
-                            await send_result(symbol)
+                        try:
+                            if now >= exec_time - datetime.timedelta(seconds=60) and not active_signals[symbol].get("confirmed"):
+                                await confirm_signal_with_m1(symbol)
+                                active_signals[symbol]["confirmed"] = True
+                            if now >= exec_time + datetime.timedelta(seconds=60):
+                                await send_result(symbol)
+                        except Exception as e:
+                            print(f"[ERREUR CONFIRM/RESULT] {symbol} : {e}")
                 except Exception as e:
-                    print(f"[ERREUR] {symbol} : {e}")
-            clean_old_signals()
-            await send_periodic_report()
-            print("[INFO] Fin d’un tour de boucle, pause 10s")
+                    print(f"[ERREUR SYMBOL LOOP] {symbol} : {e}")
+            try:
+                clean_old_signals()
+                await send_periodic_report()
+            except Exception as maintenance_err:
+                print(f"[MAINTENANCE ERROR] : {maintenance_err}")
+
+            print("[INFO] Pause de 10s avant prochaine boucle")
             await asyncio.sleep(10)
     finally:
         is_running = False
@@ -319,11 +360,14 @@ if __name__ == "__main__":
         scheduler = AsyncIOScheduler(timezone=TIMEZONE)
         scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
         scheduler.start()
+
         await app.initialize()
         await app.start()
+
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(button))
         app.add_handler(CommandHandler("set_threshold", set_threshold))
+
         await app.bot.send_message(chat_id=CHAT_ID, text="✅ Bot lancé avec succès et prêt à analyser les marchés !", parse_mode="Markdown")
         await app.run_polling()
 
