@@ -212,6 +212,7 @@ async def confirm_signal_with_m1(symbol):
         print(f"[ERREUR Confirm M1] {symbol} : {e}")
 
 async def ping_binance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("[DEBUG] ➤ Commande /ping_binance reçue !")
     try:
         df = get_ohlcv("BTCUSDT", "1m")
         if df.empty:
@@ -432,6 +433,7 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("set_threshold", set_threshold))
         app.add_handler(CommandHandler("analyse", analyse))
         app.add_handler(CommandHandler("verifie", verifie))
+        app.add_handler(CommandHandler("pingbinance", ping_binance))
         app.add_handler(CommandHandler("ping_binance", ping_binance))
 
         await app.initialize()
