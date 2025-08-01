@@ -67,25 +67,39 @@ def get_ohlcv(symbol, interval):
         return pd.DataFrame()
 
 def calculate_indicators(df):
-    if df.empty: return df
+    if df.empty:
+        return df
+
+    # --- EMA classiques ---
     df["EMA"] = df["close"].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df["EMA3"] = df["close"].ewm(span=3, adjust=False).mean()
+    df["EMA8"] = df["close"].ewm(span=8, adjust=False).mean()
     df["EMA200"] = df["close"].ewm(span=EMA_TREND, adjust=False).mean()
+
+    # --- RSI rapide (scalping) ---
+    rsi_period = 2  # ⚠️ Remplace le global RSI_PERIOD ici
     delta = df["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(RSI_PERIOD).mean()
-    avg_loss = loss.rolling(RSI_PERIOD).mean()
+    avg_gain = gain.rolling(rsi_period).mean()
+    avg_loss = loss.rolling(rsi_period).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
+
+    # --- MACD & Histogramme ---
     exp1 = df["close"].ewm(span=MACD_FAST, adjust=False).mean()
     exp2 = df["close"].ewm(span=MACD_SLOW, adjust=False).mean()
     df["MACD"] = exp1 - exp2
     df["MACD_Signal"] = df["MACD"].ewm(span=MACD_SIGNAL, adjust=False).mean()
+    df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
 
+    # --- CCI ---
     tp = (df["high"] + df["low"] + df["close"]) / 3
     sma = tp.rolling(CCI_PERIOD).mean()
     mad = tp.rolling(CCI_PERIOD).apply(lambda x: np.fabs(x - x.mean()).mean())
     df["CCI"] = (tp - sma) / (0.015 * mad)
+
+    # --- ADX ---
     tr = pd.concat([
         df["high"] - df["low"],
         abs(df["high"] - df["close"].shift()),
@@ -100,20 +114,44 @@ def calculate_indicators(df):
     minus_di = 100 * (pd.Series(minus_dm).rolling(ADX_PERIOD).sum() / atr)
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     df["ADX"] = dx.rolling(ADX_PERIOD).mean()
+
+    # --- Bollinger Bands ---
     df["BB_MA"] = df["close"].rolling(BB_PERIOD).mean()
     df["BB_STD"] = df["close"].rolling(BB_PERIOD).std()
     df["BB_upper"] = df["BB_MA"] + 2 * df["BB_STD"]
     df["BB_lower"] = df["BB_MA"] - 2 * df["BB_STD"]
-    df["STOCH"] = ((df["close"] - df["low"].rolling(STOCH_PERIOD).min()) /
-                  (df["high"].rolling(STOCH_PERIOD).max() - df["low"].rolling(STOCH_PERIOD).min())) * 100
+
+    # --- Stochastic RSI ---
+    stoch_rsi_period = 14
+    stoch_rsi = (df["RSI"] - df["RSI"].rolling(stoch_rsi_period).min()) / (
+        df["RSI"].rolling(stoch_rsi_period).max() - df["RSI"].rolling(stoch_rsi_period).min()
+    )
+    df["StochRSI"] = stoch_rsi * 100  # Pour avoir des valeurs en %
     return df
 
+
 def check_signal(df):
-    if df.empty: return None
-    if df["RSI"].iloc[-1] < 30 and df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]:
+    if df.empty:
+        return None
+
+    last = df.iloc[-1]
+
+    # Conditions pour CALL
+    if (
+        last["RSI"] < 10 and
+        last["EMA3"] > last["EMA8"] and
+        last["close"] <= last["BB_lower"]
+    ):
         return "CALL"
-    elif df["RSI"].iloc[-1] > 70 and df["MACD"].iloc[-1] < df["MACD_Signal"].iloc[-1]:
+
+    # Conditions pour PUT
+    elif (
+        last["RSI"] > 90 and
+        last["EMA3"] < last["EMA8"] and
+        last["close"] >= last["BB_upper"]
+    ):
         return "PUT"
+
     return None
 
 def estimate_confidence(df):
@@ -299,7 +337,7 @@ async def monitoring_loop():
                     base_signal = check_signal(m5)
                     confirm = check_signal(m15)
 
-                    if base_signal and confirm and base_signal == confirm:
+                    if base_signal:
                         key = f"{symbol}_{base_signal}_{m5['timestamp'].iloc[-1]}"
                         if key != last_sent_signals.get(symbol):
                             confidence, reasons = estimate_confidence(m5)
@@ -391,12 +429,15 @@ async def verifie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def manual_analysis():
     try:
+        found = False
         for symbol in SYMBOLS:
-            m5 = get_ohlcv(symbol, "5m")
-            m15 = get_ohlcv(symbol, "15m")
-
-            m5 = calculate_indicators(m5)
-            m15 = calculate_indicators(m15)
+            for interval in ["5m", "15m"]:
+                df = get_ohlcv(symbol, interval)
+                df = calculate_indicators(df)
+                if interval == "5m":
+                    m5 = df
+                else:
+                    m15 = df
 
             signal = check_signal(m5)
             confirm = check_signal(m15)
@@ -405,6 +446,9 @@ async def manual_analysis():
                 confidence, reasons = estimate_confidence(m5)
                 if confidence >= THRESHOLD:
                     await send_signal(symbol, signal, m5, confidence, reasons)
+                    found = True
+        if not found:
+            await app.bot.send_message(chat_id=CHAT_ID, text="🔎 Aucune opportunité détectée pour l’instant.")
     except Exception as e:
         print(f"[ERREUR Analyse manuelle] {e}")
 
