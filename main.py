@@ -435,13 +435,31 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("ping_binance", ping_binance))
 
         await app.initialize()
+
+        keyboard = [
+            [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
+            [InlineKeyboardButton("📊 Analyse", callback_data="analyse")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        help_message = (
+            "📚 *Commandes disponibles :*\n\n"
+            "/start - Démarrer le bot (relance la boucle)\n"
+            "/analyse - Analyse manuelle immédiate\n"
+            "/verifie - Vérifie l’état du bot\n"
+            "/set_threshold 70 - Change le seuil de fiabilité\n"
+            "/ping_binance - Vérifie la connexion à Binance\n"
+            "🛑 *Stop* - Arrête toutes les boucles"
+        )
+
         await app.bot.send_message(
             chat_id=CHAT_ID,
             text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
-            reply_markup=get_stop_button(),
+            reply_markup=reply_markup,
             parse_mode="Markdown"
         )
+        await app.bot.send_message(chat_id=CHAT_ID, text=help_message, parse_mode="Markdown")
         await app.start()
-        await app.run_polling()  # ✅ Remplace .updater.start_polling()
+        await app.run_polling()
 
     asyncio.run(main())
