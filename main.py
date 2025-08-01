@@ -360,8 +360,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛑 *Stop* - Arrête toutes les boucles"
     )
 
-    await update.message.reply_text("📊 Bot démarré. Analyse des marchés en cours...", reply_markup=reply_markup)
+    await update.message.reply_text(
+        "✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
     await update.message.reply_text(help_message, parse_mode="Markdown")
+    
     asyncio.create_task(safe_monitoring_loop())
 
 async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -442,36 +447,9 @@ async def main():
     app.add_handler(CommandHandler("ping_binance", ping_binance))
 
     await app.initialize()
-
-    keyboard = [
-        [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
-        [InlineKeyboardButton("📊 Analyse", callback_data="analyse")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    help_message = (
-        "📚 *Commandes disponibles :*\n\n"
-        "/start - Démarrer le bot (relance la boucle)\n"
-        "/analyse - Analyse manuelle immédiate\n"
-        "/verifie - Vérifie l’état du bot\n"
-        "/set_threshold 70 - Change le seuil de fiabilité\n"
-        "/ping_binance - Vérifie la connexion à Binance\n"
-        "🛑 *Stop* - Arrête toutes les boucles"
-    )
-
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    await app.bot.send_message(chat_id=CHAT_ID, text=help_message, parse_mode="Markdown")
-
-    # 🟢 Ce seul appel suffit, il démarre tout : polling + loop
     await app.run_polling()
 
 # ❗ Ne pas faire asyncio.run(main()) ici
 if __name__ == "__main__":
-    # Juste lancer la tâche dans la boucle déjà existante
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
