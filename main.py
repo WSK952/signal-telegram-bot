@@ -422,45 +422,52 @@ async def daily_summary():
         print(f"[ERREUR Résumé Journalier] {e}")
 
 # --- LANCEMENT FINAL ---
+import nest_asyncio
+import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+async def main():
+    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+    scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
+    scheduler.start()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CommandHandler("set_threshold", set_threshold))
+    app.add_handler(CommandHandler("analyse", analyse))
+    app.add_handler(CommandHandler("verifie", verifie))
+    app.add_handler(CommandHandler("pingbinance", ping_binance))
+    app.add_handler(CommandHandler("ping_binance", ping_binance))  # alias
+
+    await app.initialize()
+
+    keyboard = [
+        [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
+        [InlineKeyboardButton("📊 Analyse", callback_data="analyse")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    help_message = (
+        "📚 *Commandes disponibles :*\n\n"
+        "/start - Démarrer le bot (relance la boucle)\n"
+        "/analyse - Analyse manuelle immédiate\n"
+        "/verifie - Vérifie l’état du bot\n"
+        "/set_threshold 70 - Change le seuil de fiabilité\n"
+        "/ping_binance - Vérifie la connexion à Binance\n"
+        "🛑 *Stop* - Arrête toutes les boucles"
+    )
+
+    await app.bot.send_message(
+        chat_id=CHAT_ID,
+        text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    await app.bot.send_message(chat_id=CHAT_ID, text=help_message, parse_mode="Markdown")
+
+    await app.start()
+    await app.run_polling()
+
 if __name__ == "__main__":
-    async def main():
-        scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-        scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
-        scheduler.start()
-
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CallbackQueryHandler(button))
-        app.add_handler(CommandHandler("set_threshold", set_threshold))
-        app.add_handler(CommandHandler("analyse", analyse))
-        app.add_handler(CommandHandler("verifie", verifie))
-        app.add_handler(CommandHandler("pingbinance", ping_binance))
-        app.add_handler(CommandHandler("ping_binance", ping_binance))
-
-        await app.initialize()
-
-        keyboard = [
-            [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
-            [InlineKeyboardButton("📊 Analyse", callback_data="analyse")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        help_message = (
-            "📚 *Commandes disponibles :*\n\n"
-            "/start - Démarrer le bot (relance la boucle)\n"
-            "/analyse - Analyse manuelle immédiate\n"
-            "/verifie - Vérifie l’état du bot\n"
-            "/set_threshold 70 - Change le seuil de fiabilité\n"
-            "/ping_binance - Vérifie la connexion à Binance\n"
-            "🛑 *Stop* - Arrête toutes les boucles"
-        )
-
-        await app.bot.send_message(
-            chat_id=CHAT_ID,
-            text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-        await app.bot.send_message(chat_id=CHAT_ID, text=help_message, parse_mode="Markdown")
-        await app.run_polling()
-
+    nest_asyncio.apply()
     asyncio.run(main())
