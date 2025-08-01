@@ -442,6 +442,6 @@ if __name__ == "__main__":
             parse_mode="Markdown"
         )
         await app.start()
-        await app.updater.start_polling()  # ← CETTE LIGNE est nécessaire !
+        await app.run_polling()  # ✅ Remplace .updater.start_polling()
 
     asyncio.run(main())
