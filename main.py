@@ -490,10 +490,18 @@ async def main():
     app.add_handler(CommandHandler("pingbinance", ping_binance))
     app.add_handler(CommandHandler("ping_binance", ping_binance))
 
-    await app.initialize()
-    await app.run_polling()
+    # ✅ Mettez ici VOTRE TOKEN réel et le lien complet du webhook
+    WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app/{TOKEN}"
 
-# ❗ Ne pas faire asyncio.run(main()) ici
+    await app.initialize()
+    await app.bot.set_webhook(WEBHOOK_URL)
+    await app.start()
+    await app.updater.start_webhook(
+        listen="0.0.0.0",
+        port=8000,
+        url_path=TOKEN,
+    )
+
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
