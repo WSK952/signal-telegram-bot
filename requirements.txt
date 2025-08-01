@@ -4,3 +4,4 @@ pytz
 pandas
 numpy
 apscheduler
+nest_asyncio
