@@ -438,24 +438,24 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("ping_binance", ping_binance))
 
         await app.bot.send_message(
-    chat_id=CHAT_ID,
-    text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
-    reply_markup=get_stop_button(),
-    parse_mode="Markdown"
-)
+            chat_id=CHAT_ID,
+            text="✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
+            reply_markup=get_stop_button(),
+            parse_mode="Markdown"
+        )
 
-await app.bot.send_message(
-    chat_id=CHAT_ID,
-    text=(
-        "📚 *Commandes disponibles :*\n\n"
-        "/start - Démarrer le bot (relance la boucle)\n"
-        "/analyse - Analyse manuelle immédiate\n"
-        "/verifie - Vérifie l’état du bot\n"
-        "/set_threshold 70 - Change le seuil de fiabilité\n"
-        "/ping_binance - Vérifie la connexion à Binance\n"
-        "🛑 *Stop* - Arrête toutes les boucles"
-    ),
-    parse_mode="Markdown"
-)
+        await app.bot.send_message(
+            chat_id=CHAT_ID,
+            text=(
+                "📚 *Commandes disponibles :*\n\n"
+                "/start - Démarrer le bot (relance la boucle)\n"
+                "/analyse - Analyse manuelle immédiate\n"
+                "/verifie - Vérifie l’état du bot\n"
+                "/set_threshold 70 - Change le seuil de fiabilité\n"
+                "/ping_binance - Vérifie la connexion à Binance\n"
+                "🛑 *Stop* - Arrête toutes les boucles"
+            ),
+            parse_mode="Markdown"
+        )
 
     asyncio.run(main())
