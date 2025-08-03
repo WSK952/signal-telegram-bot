@@ -473,31 +473,43 @@ async def daily_summary():
 # --- LANCEMENT FINAL ---
 import nest_asyncio
 import asyncio
+import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiohttp import web
 
 nest_asyncio.apply()
+
+# ✅ Webhook config
+WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app/{TOKEN}"
+PORT = int(os.environ.get("PORT", 8443))
+
+# ✅ Route test pour GET
+async def handle(request):
+    return web.Response(text="Webhook OK")
+
+app.web_app.add_routes([web.get(f"/{TOKEN}", handle)])
 
 async def main():
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
     scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
     scheduler.start()
 
+    # ➕ Commandes
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(CommandHandler("analyse", analyse))
     app.add_handler(CommandHandler("verifie", verifie))
     app.add_handler(CommandHandler("pingbinance", ping_binance))
 
-    WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app/{TOKEN}"
-    PORT = int(os.environ.get("PORT", 8443))
-
     await app.initialize()
+
     await app.bot.set_my_commands([
-    ("start", "Démarrer le bot"),
-    ("analyse", "Analyse manuelle"),
-    ("verifie", "Vérifier l’état du bot"),
-    ("pingbinance", "Tester connexion Binance")
-])
+        ("start", "Démarrer le bot"),
+        ("analyse", "Analyse manuelle"),
+        ("verifie", "Vérifier l’état du bot"),
+        ("pingbinance", "Tester connexion Binance")
+    ])
+
     await app.bot.set_webhook(WEBHOOK_URL)
 
     await app.run_webhook(
