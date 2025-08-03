@@ -470,24 +470,32 @@ async def daily_summary():
     except Exception as e:
         print(f"[ERREUR Résumé Journalier] {e}")
 
-# --- LANCEMENT FINAL ---
+# # --- LANCEMENT FINAL ---
 import nest_asyncio
 import asyncio
 import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiohttp import web
+from telegram.ext import Application
 
 nest_asyncio.apply()
 
-# ✅ Webhook config
-WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app/{TOKEN}"
+# 🔁 Webhook config
+WEBHOOK_PATH = f"/{TOKEN}"
+WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app{WEBHOOK_PATH}"
 PORT = int(os.environ.get("PORT", 8443))
 
-# ✅ Route test pour GET
+# ✅ Créer l'app serveur aiohttp manuellement
+aiohttp_app = web.Application()
+
+# ✅ Route de test
 async def handle(request):
     return web.Response(text="Webhook OK")
 
-app.web_app.add_routes([web.get(f"/{TOKEN}", handle)])
+aiohttp_app.router.add_get(WEBHOOK_PATH, handle)
+
+# ✅ Créer le bot avec serveur aiohttp intégré
+app = Application.builder().token(TOKEN).web_app(aiohttp_app).build()
 
 async def main():
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
