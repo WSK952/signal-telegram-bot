@@ -495,7 +495,6 @@ async def main():
     scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
     scheduler.start()
 
-    # ➕ Commandes
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(CommandHandler("analyse", analyse))
@@ -512,15 +511,16 @@ async def main():
 
     await app.bot.set_webhook(WEBHOOK_URL)
 
-    # ✅ Créer serveur aiohttp
+    # Serveur aiohttp
     aio_app = web.Application()
     aio_app.router.add_get(WEBHOOK_PATH, handle)
 
-    # ✅ Lancer bot + webhook
     runner = web.AppRunner(aio_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
+
+    print(f"✅ Webhook en écoute sur {WEBHOOK_PATH}")
 
     await app.start()
     await app.updater.start_polling()
