@@ -470,33 +470,26 @@ async def daily_summary():
     except Exception as e:
         print(f"[ERREUR Résumé Journalier] {e}")
 
-# # --- LANCEMENT FINAL ---
+# --- LANCEMENT FINAL ---
 import nest_asyncio
 import asyncio
 import os
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiohttp import web
-from telegram.ext import Application
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 nest_asyncio.apply()
 
-# 🔁 Webhook config
 WEBHOOK_PATH = f"/{TOKEN}"
 WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app{WEBHOOK_PATH}"
 PORT = int(os.environ.get("PORT", 8443))
 
-# ✅ Créer l'app serveur aiohttp manuellement
-aiohttp_app = web.Application()
+app = Application.builder().token(TOKEN).build()
 
-# ✅ Route de test
+# ✅ Route aiohttp
 async def handle(request):
     return web.Response(text="Webhook OK")
 
-aiohttp_app.router.add_get(WEBHOOK_PATH, handle)
-
-# ✅ Créer le bot avec serveur aiohttp intégré
-app = Application.builder().token(TOKEN).web_app(aiohttp_app).build()
-
+# ✅ Main
 async def main():
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
     scheduler.add_job(daily_summary, trigger='cron', hour=23, minute=59)
@@ -510,7 +503,6 @@ async def main():
     app.add_handler(CommandHandler("pingbinance", ping_binance))
 
     await app.initialize()
-
     await app.bot.set_my_commands([
         ("start", "Démarrer le bot"),
         ("analyse", "Analyse manuelle"),
@@ -520,12 +512,19 @@ async def main():
 
     await app.bot.set_webhook(WEBHOOK_URL)
 
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL
-    )
+    # ✅ Créer serveur aiohttp
+    aio_app = web.Application()
+    aio_app.router.add_get(WEBHOOK_PATH, handle)
+
+    # ✅ Lancer bot + webhook
+    runner = web.AppRunner(aio_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.idle()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
