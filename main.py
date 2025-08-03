@@ -493,11 +493,6 @@ async def main():
     await app.initialize()
     await app.bot.set_webhook(WEBHOOK_URL)
     await app.start()
-    await app.updater.start_webhook(
-        listen="0.0.0.0",
-        port=8000,
-        url_path=TOKEN,
-    )
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
