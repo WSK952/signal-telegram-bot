@@ -15,12 +15,9 @@ CHAT_ID = "1091559539"
 TIMEZONE = pytz.timezone("Europe/Paris")
 
 SYMBOLS = [
-    "BTCUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT",
-    "ETHUSDT", "DASHUSDT", "BCHUSDT", "FILUSDT",
-    "LTCUSDT", "YFIUSDT", "ZECUSDT"
+    "BTCUSDT", "ETHUSDT", "XRPUSDT", "DOGEUSDT", "LINKUSDT"
 ]
 
-RSI_PERIOD = 14
 EMA_PERIOD = 9
 EMA_TREND = 200
 MACD_FAST = 12
@@ -30,13 +27,17 @@ ADX_PERIOD = 14
 CCI_PERIOD = 20
 VOLUME_PERIOD = 20
 BB_PERIOD = 20
-STOCH_PERIOD = 14
 RANGE_THRESHOLD = 0.15
-
-CONFIDENCE_THRESHOLD = 60
 THRESHOLD = 60
 SIGNAL_COOLDOWN_MINUTES = 5
 
+PAIR_PARAMS = {
+    "BTCUSDT": {"rsi_buy": 15, "rsi_sell": 85, "macd_weight": 1.2},
+    "ETHUSDT": {"rsi_buy": 20, "rsi_sell": 80, "macd_weight": 1.0},
+    "XRPUSDT": {"rsi_buy": 10, "rsi_sell": 90, "macd_weight": 1.5},
+    "DOGEUSDT": {"rsi_buy": 12, "rsi_sell": 88, "macd_weight": 1.4},
+    "LINKUSDT": {"rsi_buy": 18, "rsi_sell": 82, "macd_weight": 1.1},
+}
 # --- VARIABLES GLOBALES ---
 app = Application.builder().token(TOKEN).build()
 is_running = False
@@ -130,23 +131,27 @@ def calculate_indicators(df):
     return df
 
 
-def check_signal(df):
+def check_signal(df, symbol):
     if df.empty:
         return None
 
+    params = PAIR_PARAMS.get(symbol, {"rsi_buy": 15, "rsi_sell": 85, "macd_weight": 1.0})
+    rsi_buy = params["rsi_buy"]
+    rsi_sell = params["rsi_sell"]
+
     last = df.iloc[-1]
 
-    # Conditions pour CALL
+    # CALL
     if (
-        last["RSI"] < 10 and
+        last["RSI"] < rsi_buy and
         last["EMA3"] > last["EMA8"] and
         last["close"] <= last["BB_lower"]
     ):
         return "CALL"
 
-    # Conditions pour PUT
+    # PUT
     elif (
-        last["RSI"] > 90 and
+        last["RSI"] > rsi_sell and
         last["EMA3"] < last["EMA8"] and
         last["close"] >= last["BB_upper"]
     ):
@@ -154,16 +159,20 @@ def check_signal(df):
 
     return None
 
-def estimate_confidence(df):
+def estimate_confidence(df, symbol):
+    params = PAIR_PARAMS.get(symbol, {"macd_weight": 1.0})
+    macd_weight = params["macd_weight"]
+
     score = 0
     reasons = []
     if df["RSI"].iloc[-1] < 30 or df["RSI"].iloc[-1] > 70:
         score += 15
         reasons.append("RSI extrême")
     if (df["MACD"].iloc[-1] > df["MACD_Signal"].iloc[-1]) or (df["MACD"].iloc[-1] < df["MACD_Signal"].iloc[-1]):
-        score += 15
-        reasons.append("Croisement MACD")
-    
+        score += int(15 * macd_weight)
+        reasons.append("Croisement MACD pondéré")
+
+    # Les autres critères inchangés
     if df["ADX"].iloc[-1] > 20:
         score += 10
         reasons.append("Tendance forte (ADX)")
@@ -334,13 +343,13 @@ async def monitoring_loop():
                     m5 = calculate_indicators(m5)
                     m15 = calculate_indicators(m15)
 
-                    base_signal = check_signal(m5)
-                    confirm = check_signal(m15)
+                    base_signal = check_signal(m5, symbol)
+                    confirm = check_signal(m15, symbol)
 
                     if base_signal:
                         key = f"{symbol}_{base_signal}_{m5['timestamp'].iloc[-1]}"
                         if key != last_sent_signals.get(symbol):
-                            confidence, reasons = estimate_confidence(m5)
+                            confidence, reasons = estimate_confidence(m5, symbol)
                             if confidence >= THRESHOLD:
                                 await send_signal(symbol, base_signal, m5, confidence, reasons)
                                 last_sent_signals[symbol] = key
@@ -389,14 +398,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     help_message = (
-        "📚 *Commandes disponibles :*\n\n"
-        "/start - Démarrer le bot (relance la boucle)\n"
-        "/analyse - Analyse manuelle immédiate\n"
-        "/verifie - Vérifie l’état du bot\n"
-        "/set_threshold 70 - Change le seuil de fiabilité\n"
-        "/ping_binance - Vérifie la connexion à Binance\n"
-        "🛑 *Stop* - Arrête toutes les boucles"
-    )
+    "📚 *Commandes disponibles :*\n\n"
+    "/start - Démarrer le bot\n"
+    "/analyse - Lancer une analyse manuelle immédiate\n"
+    "/verifie - Vérifier l’état du bot\n"
+    "/ping_binance - Tester la connexion à Binance\n"
+    "🛑 *Stop* - Arrêter les analyses"
+)
 
     await update.message.reply_text(
         "✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
@@ -406,15 +414,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_message, parse_mode="Markdown")
     
     asyncio.create_task(safe_monitoring_loop())
-
-async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global THRESHOLD
-    try:
-        new_val = int(context.args[0])
-        THRESHOLD = new_val
-        await update.message.reply_text(f"🔧 Nouveau seuil de fiabilité : {THRESHOLD}%")
-    except:
-        await update.message.reply_text("❌ Format invalide. Utilisez : /set_threshold 70")
 
 async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Lancement d’une analyse manuelle...")
@@ -439,11 +438,11 @@ async def manual_analysis():
                 else:
                     m15 = df
 
-            signal = check_signal(m5)
-            confirm = check_signal(m15)
+            signal = check_signal(m5, symbol)
+            confirm = check_signal(m15, symbol)
 
             if signal and confirm and signal == confirm:
-                confidence, reasons = estimate_confidence(m5)
+                confidence, reasons = estimate_confidence(m5, symbol)
                 if confidence >= THRESHOLD:
                     await send_signal(symbol, signal, m5, confidence, reasons)
                     found = True
@@ -484,11 +483,9 @@ async def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("set_threshold", set_threshold))
     app.add_handler(CommandHandler("analyse", analyse))
     app.add_handler(CommandHandler("verifie", verifie))
     app.add_handler(CommandHandler("pingbinance", ping_binance))
-    app.add_handler(CommandHandler("ping_binance", ping_binance))
 
     # ✅ Mettez ici VOTRE TOKEN réel et le lien complet du webhook
     WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app/{TOKEN}"
