@@ -492,6 +492,12 @@ async def main():
     PORT = int(os.environ.get("PORT", 8443))
 
     await app.initialize()
+    await app.bot.set_my_commands([
+    ("start", "Démarrer le bot"),
+    ("analyse", "Analyse manuelle"),
+    ("verifie", "Vérifier l’état du bot"),
+    ("pingbinance", "Tester connexion Binance")
+])
     await app.bot.set_webhook(WEBHOOK_URL)
 
     await app.run_webhook(
