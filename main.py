@@ -4,6 +4,7 @@ import pytz
 import pandas as pd
 import numpy as np
 import asyncio
+import os
 from collections import deque
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -487,12 +488,17 @@ async def main():
     app.add_handler(CommandHandler("verifie", verifie))
     app.add_handler(CommandHandler("pingbinance", ping_binance))
 
-    # ✅ Mettez ici VOTRE TOKEN réel et le lien complet du webhook
     WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app/{TOKEN}"
+    PORT = int(os.environ.get("PORT", 8443))
 
     await app.initialize()
     await app.bot.set_webhook(WEBHOOK_URL)
-    await app.start()
+
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
