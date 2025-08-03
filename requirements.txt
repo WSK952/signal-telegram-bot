@@ -5,3 +5,4 @@ pandas
 numpy
 apscheduler
 nest_asyncio
+aiohttp
