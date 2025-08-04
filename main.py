@@ -392,6 +392,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await manual_analysis()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global is_running
     print(f"[COMMAND] {update.message.text} par {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
@@ -400,13 +401,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     help_message = (
-    "📚 *Commandes disponibles :*\n\n"
-    "/start - Démarrer le bot\n"
-    "/analyse - Lancer une analyse manuelle immédiate\n"
-    "/verifie - Vérifier l’état du bot\n"
-    "/ping_binance - Tester la connexion à Binance\n"
-    "🛑 *Stop* - Arrêter les analyses"
-)
+        "📚 *Commandes disponibles :*\n\n"
+        "/start - Démarrer le bot\n"
+        "/analyse - Lancer une analyse manuelle immédiate\n"
+        "/verifie - Vérifier l’état du bot\n"
+        "/ping_binance - Tester la connexion à Binance\n"
+        "🛑 *Stop* - Arrêter les analyses"
+    )
 
     await update.message.reply_text(
         "✅ Bot lancé automatiquement après déploiement et prêt à analyser les marchés !",
@@ -414,8 +415,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
     await update.message.reply_text(help_message, parse_mode="Markdown")
-    
-    asyncio.create_task(safe_monitoring_loop())
+
+    if not is_running:
+        asyncio.create_task(safe_monitoring_loop())
 
 async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Lancement d’une analyse manuelle...")
@@ -534,7 +536,8 @@ async def main():
     print(f"✅ Webhook en écoute sur {WEBHOOK_PATH}")
 
     await app.start()
-    await asyncio.Event().wait()  # 👈 bloque le processus (indispensable)
+    asyncio.create_task(safe_monitoring_loop())  # 🔁 Démarrage auto
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
