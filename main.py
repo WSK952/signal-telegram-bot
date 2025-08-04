@@ -483,7 +483,6 @@ WEBHOOK_PATH = f"/{TOKEN}"
 WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app{WEBHOOK_PATH}"
 PORT = int(os.environ.get("PORT", 8443))
 
-app = Application.builder().token(TOKEN).build()
 
 # ✅ Route aiohttp
 async def handle(request):
@@ -513,8 +512,9 @@ async def main():
 
     # Serveur aiohttp
     aio_app = web.Application()
-    aio_app.router.add_get(WEBHOOK_PATH, handle)
-
+    aio_app.router.add_post(WEBHOOK_PATH, app.webhook_handler())  # c’est lui qui gère les updates Telegram
+    aio_app.router.add_get("/healthcheck", handle)  # juste pour tester dans le navigateur
+    
     runner = web.AppRunner(aio_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
@@ -523,7 +523,7 @@ async def main():
     print(f"✅ Webhook en écoute sur {WEBHOOK_PATH}")
 
     await app.start()
-    await app.updater.start_polling()
+
 
 
 if __name__ == "__main__":
