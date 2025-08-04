@@ -531,10 +531,10 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-
     print(f"✅ Webhook en écoute sur {WEBHOOK_PATH}")
 
     await app.start()
+    await asyncio.Event().wait()  # 👈 bloque le processus (indispensable)
 
 if __name__ == "__main__":
     asyncio.run(main())
