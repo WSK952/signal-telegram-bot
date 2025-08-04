@@ -392,6 +392,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await manual_analysis()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"[COMMAND] {update.message.text} par {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("🛑 Stop", callback_data="stop")],
         [InlineKeyboardButton("📊 Analyse", callback_data="analyse")]
