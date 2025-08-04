@@ -493,6 +493,7 @@ async def handle(request):
 async def telegram_webhook(request):
     try:
         data = await request.json()
+        print("[DEBUG] ➤ Payload reçu :", data)  # 🔍 Pour vérifier dans Railway HTTP logs
         update = Update.de_json(data, app.bot)
         await app.process_update(update)
     except Exception as e:
