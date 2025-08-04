@@ -475,6 +475,7 @@ import nest_asyncio
 import asyncio
 import os
 from aiohttp import web
+from telegram import Update
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 nest_asyncio.apply()
@@ -483,10 +484,19 @@ WEBHOOK_PATH = f"/{TOKEN}"
 WEBHOOK_URL = f"https://signal-telegram-bot-production.up.railway.app{WEBHOOK_PATH}"
 PORT = int(os.environ.get("PORT", 8443))
 
-
 # ✅ Route aiohttp
 async def handle(request):
     return web.Response(text="Webhook OK")
+
+# ✅ Nouveau gestionnaire Telegram webhook
+async def telegram_webhook(request):
+    try:
+        data = await request.json()
+        update = Update.de_json(data, app.bot)
+        await app.process_update(update)
+    except Exception as e:
+        print(f"[ERREUR Webhook Handler] {e}")
+    return web.Response(text="OK")
 
 # ✅ Main
 async def main():
@@ -512,9 +522,9 @@ async def main():
 
     # Serveur aiohttp
     aio_app = web.Application()
-    aio_app.router.add_post(WEBHOOK_PATH, app.webhook_handler())  # c’est lui qui gère les updates Telegram
-    aio_app.router.add_get("/healthcheck", handle)  # juste pour tester dans le navigateur
-    
+    aio_app.router.add_post(WEBHOOK_PATH, telegram_webhook)
+    aio_app.router.add_get("/healthcheck", handle)
+
     runner = web.AppRunner(aio_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
@@ -523,8 +533,6 @@ async def main():
     print(f"✅ Webhook en écoute sur {WEBHOOK_PATH}")
 
     await app.start()
-
-
 
 if __name__ == "__main__":
     asyncio.run(main())
