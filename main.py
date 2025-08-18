@@ -467,5 +467,4 @@ if __name__ == "__main__":
         text="🚀 Bot lancé avec succès et prêt à détecter les signaux sur ETH/USDT.",
     )
     await application.run_polling()
-
     asyncio.run(main())
