@@ -444,24 +444,28 @@ application.add_handler(CommandHandler("verifie", verifie_command))
 application.add_handler(CommandHandler("historique", historique_command))
 application.add_handler(CallbackQueryHandler(handle_stop))
 
-# --- ⏰ PLANIFICATION DES TÂCHES AVEC APSCHEDULER ---
-async def periodic_report():
-    df = get_ohlcv(PAIR, "1m", LIMIT)
-    df = calculate_indicators(df)
-    await send_no_signal_report(df)
-
-async def main():
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(periodic_report, "interval", minutes=30)
-    scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
-    scheduler.start()
-
-    application.run_task(monitor_market())
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.idle()
-
+# --- ⏰ PLANIFICATION DES TÂCHES AVEC APSCHEDULER + LANCEMENT DU BOT ---
 if __name__ == "__main__":
-    import asyncio
+    async def main():
+        scheduler = AsyncIOScheduler()
+
+        # --- Rapport toutes les 30 minutes ---
+        async def periodic_report():
+            df = get_ohlcv(PAIR, "1m", LIMIT)
+            df = calculate_indicators(df)
+            await send_no_signal_report(df)
+
+        # --- Ajouter les tâches planifiées ---
+        scheduler.add_job(periodic_report, "interval", minutes=30)
+        scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
+        scheduler.start()
+
+        # --- Démarrer le monitoring + le bot en parallèle ---
+        asyncio.create_task(monitor_market())  # Lance monitor_market() sans bloquer
+
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        await application.updater.idle()
+
     asyncio.run(main())
