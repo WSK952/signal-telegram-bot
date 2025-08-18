@@ -461,14 +461,11 @@ if __name__ == "__main__":
         scheduler.start()
 
         # --- Démarrer le monitoring + le bot en parallèle ---
-        asyncio.create_task(monitor_market())
-
-        await application.initialize()
-        await application.start()
-        await application.bot.send_message(
-    chat_id=CHAT_ID,
-    text="🚀 Bot lancé avec succès et prêt à détecter les signaux sur ETH/USDT.",
-)
-        await application.run_polling()
+            asyncio.create_task(monitor_market())
+    await application.bot.send_message(
+        chat_id=CHAT_ID,
+        text="🚀 Bot lancé avec succès et prêt à détecter les signaux sur ETH/USDT.",
+    )
+    await application.run_polling()
 
     asyncio.run(main())
