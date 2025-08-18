@@ -445,26 +445,28 @@ application.add_handler(CommandHandler("historique", historique_command))
 application.add_handler(CallbackQueryHandler(handle_stop))
 
 # --- ⏰ PLANIFICATION DES TÂCHES AVEC APSCHEDULER + LANCEMENT DU BOT ---
-if __name__ == "__main__":
-    async def main():
-        scheduler = AsyncIOScheduler()
+async def main():
+    scheduler = AsyncIOScheduler()
 
-        # --- Rapport toutes les 30 minutes ---
-        async def periodic_report():
-            df = get_ohlcv(PAIR, "1m", LIMIT)
-            df = calculate_indicators(df)
-            await send_no_signal_report(df)
+    # --- Rapport toutes les 30 minutes ---
+    async def periodic_report():
+        df = get_ohlcv(PAIR, "1m", LIMIT)
+        df = calculate_indicators(df)
+        await send_no_signal_report(df)
 
-        # --- Ajouter les tâches planifiées ---
-        scheduler.add_job(periodic_report, "interval", minutes=30)
-        scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
-        scheduler.start()
+    # --- Ajouter les tâches planifiées ---
+    scheduler.add_job(periodic_report, "interval", minutes=30)
+    scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
+    scheduler.start()
 
-        # --- Démarrer le monitoring + le bot en parallèle ---
+    # --- Démarrer le monitoring + le bot en parallèle ---
     asyncio.create_task(monitor_market())
     await application.bot.send_message(
         chat_id=CHAT_ID,
         text="🚀 Bot lancé avec succès et prêt à détecter les signaux sur ETH/USDT.",
     )
     await application.run_polling()
+
+if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
