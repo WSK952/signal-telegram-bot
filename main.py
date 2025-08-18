@@ -445,20 +445,23 @@ application.add_handler(CommandHandler("historique", historique_command))
 application.add_handler(CallbackQueryHandler(handle_stop))
 
 # --- ⏰ PLANIFICATION DES TÂCHES AVEC APSCHEDULER ---
-if __name__ == "__main__":
+async def periodic_report():
+    df = get_ohlcv(PAIR, "1m", LIMIT)
+    df = calculate_indicators(df)
+    await send_no_signal_report(df)
+
+async def main():
     scheduler = AsyncIOScheduler()
-
-    # --- Rapport toutes les 30 minutes ---
-    async def periodic_report():
-        df = get_ohlcv(PAIR, "1m", LIMIT)
-        df = calculate_indicators(df)
-        await send_no_signal_report(df)
-
-    # Tâches planifiées
     scheduler.add_job(periodic_report, "interval", minutes=30)
     scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
     scheduler.start()
 
-    # Lancement de l’analyse + bot Telegram
     application.run_task(monitor_market())
-    application.run_polling()
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await application.updater.idle()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
