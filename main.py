@@ -469,7 +469,6 @@ if __name__ == "__main__":
     chat_id=CHAT_ID,
     text="🚀 Bot lancé avec succès et prêt à détecter les signaux sur ETH/USDT.",
 )
-        await application.updater.start_polling()
-        await application.updater.idle()
+        await application.run_polling()
 
     asyncio.run(main())
