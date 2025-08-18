@@ -1,9 +1,9 @@
-requests
-python-telegram-bot[webhooks]==20.8
-pytz
 pandas
 numpy
-apscheduler
-nest_asyncio
-aiohttp
+requests
 matplotlib
+pytz
+apscheduler
+textblob
+snscrape
+python-telegram-bot==20.3
