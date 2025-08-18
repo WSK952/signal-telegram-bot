@@ -461,7 +461,7 @@ if __name__ == "__main__":
         scheduler.start()
 
         # --- Démarrer le monitoring + le bot en parallèle ---
-        asyncio.create_task(monitor_market())  # Lance monitor_market() sans bloquer
+        asyncio.create_task(monitor_market())
 
         await application.initialize()
         await application.start()
