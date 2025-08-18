@@ -6,3 +6,4 @@ numpy
 apscheduler
 nest_asyncio
 aiohttp
+matplotlib
