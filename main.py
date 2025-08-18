@@ -17,7 +17,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- ⚙️ CONFIGURATION GLOBALE ---
-TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
+TOKEN = "8212480058:AAHrq5yjlAzrnOlAla0IE42V2Z2w4Y05s80"
 CHAT_ID = "1091559539"
 TIMEZONE = pytz.timezone("Europe/Paris")
 PAIR = "ETHUSDT"
