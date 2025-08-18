@@ -465,6 +465,10 @@ if __name__ == "__main__":
 
         await application.initialize()
         await application.start()
+        await application.bot.send_message(
+    chat_id=CHAT_ID,
+    text="🚀 Bot lancé avec succès et prêt à détecter les signaux sur ETH/USDT.",
+)
         await application.updater.start_polling()
         await application.updater.idle()
 
