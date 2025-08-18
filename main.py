@@ -1,4 +1,4 @@
-# --- IMPORTATIONS & CONFIGURATION GLOBALE ---
+# --- 📦 IMPORTATIONS ---
 import os
 import pytz
 import asyncio
@@ -8,76 +8,60 @@ import pandas as pd
 import numpy as np
 import requests
 import matplotlib.pyplot as plt
+import subprocess
+from textblob import TextBlob
+from collections import defaultdict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- SUIVI JOURNALIER DES PERFORMANCES ---
-from collections import defaultdict
-
-daily_stats = {
-    "total_signals": 0,
-    "wins": 0,
-    "losses": 0,
-    "directions": [],
-}
-# --- PARAMÈTRES DU BOT TELEGRAM ---
+# --- ⚙️ CONFIGURATION GLOBALE ---
 TOKEN = "8450398342:AAEhPlH-lrECa2moq_4oSOKDjSmMpGmeaRA"
 CHAT_ID = "1091559539"
 TIMEZONE = pytz.timezone("Europe/Paris")
-
-# --- PARAMÈTRES DE L'ANALYSE ---
 PAIR = "ETHUSDT"
-INTERVALS = ["1m", "5m"]  # Analyse sur M1 + M5
-LIMIT = 200  # Nombre de bougies à récupérer
+INTERVALS = ["1m", "5m"]
+LIMIT = 200
 
-# --- INITIALISATION DES LOGS ---
+# --- 📊 INIT LOGS & TELEGRAM BOT ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-
-# --- INITIALISATION DU BOT TELEGRAM ---
 application = Application.builder().token(TOKEN).build()
 
-# --- SUIVI JOURNALIER DES PERFORMANCES ---
-from collections import defaultdict
-
+# --- 📈 STATISTIQUES JOURNALIÈRES ---
 daily_stats = {
     "total_signals": 0,
     "wins": 0,
     "losses": 0,
     "directions": [],
 }
-# --- 📈 RÉCUPÉRATION DES DONNÉES DE MARCHÉ (Binance) ---
+
+# --- 🧠 MÉMOIRE DES ERREURS (APPRENTISSAGE) ---
+error_memory = []
+
+# --- 📉 RÉCUPÉRATION DES DONNÉES DE MARCHÉ (Binance) ---
 def get_ohlcv(pair="ETHUSDT", interval="1m", limit=200):
     url = f"https://api.binance.com/api/v3/klines"
-    params = {
-        "symbol": pair,
-        "interval": interval,
-        "limit": limit
-    }
+    params = {"symbol": pair, "interval": interval, "limit": limit}
     try:
         response = requests.get(url, params=params)
         data = response.json()
-
         df = pd.DataFrame(data, columns=[
             "timestamp", "open", "high", "low", "close", "volume",
             "close_time", "quote_asset_volume", "number_of_trades",
             "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
         ])
-
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("timestamp", inplace=True)
         df = df[["open", "high", "low", "close", "volume"]].astype(float)
-
         return df
-
     except Exception as e:
-        print(f"Erreur lors du téléchargement des données : {e}")
+        print(f"[❌] Erreur téléchargement données : {e}")
         return pd.DataFrame()
 
-# --- 🔧 CALCUL DES INDICATEURS TECHNIQUES ---
+# --- 📊 CALCUL DES INDICATEURS TECHNIQUES ---
 def calculate_indicators(df):
     if df.empty:
         return df
@@ -110,7 +94,7 @@ def calculate_indicators(df):
 
     return df
 
-# --- 🧠 DÉTECTION DU SIGNAL TRADING AVEC SCORE DE FIABILITÉ ---
+# --- 🧠 DÉTECTION DES SIGNAUX + SCORE DE FIABILITÉ ---
 def detect_signal(df):
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -118,7 +102,6 @@ def detect_signal(df):
     confirmations = []
     explanations = []
 
-    # RSI
     if last["RSI"] < 30:
         confirmations.append("CALL")
         explanations.append("RSI < 30 (survendu)")
@@ -126,7 +109,6 @@ def detect_signal(df):
         confirmations.append("PUT")
         explanations.append("RSI > 70 (suracheté)")
 
-    # MACD
     if last["MACD"] > last["MACD_Signal"] and prev["MACD"] <= prev["MACD_Signal"]:
         confirmations.append("CALL")
         explanations.append("MACD croisement haussier")
@@ -134,7 +116,6 @@ def detect_signal(df):
         confirmations.append("PUT")
         explanations.append("MACD croisement baissier")
 
-    # EMA Trend
     if last["EMA9"] > last["EMA200"]:
         confirmations.append("CALL")
         explanations.append("Tendance haussière (EMA9 > EMA200)")
@@ -142,7 +123,6 @@ def detect_signal(df):
         confirmations.append("PUT")
         explanations.append("Tendance baissière (EMA9 < EMA200)")
 
-    # Stochastic RSI
     if last["StochRSI"] < 20:
         confirmations.append("CALL")
         explanations.append("StochRSI < 20")
@@ -150,7 +130,6 @@ def detect_signal(df):
         confirmations.append("PUT")
         explanations.append("StochRSI > 80")
 
-    # Résultat global
     call_count = confirmations.count("CALL")
     put_count = confirmations.count("PUT")
 
@@ -161,14 +140,13 @@ def detect_signal(df):
     else:
         signal = None
 
-    # Fiabilité
     total = len(explanations)
     confirm = max(call_count, put_count)
     score = round((confirm / total) * 100) if total > 0 else 0
 
     return signal, score, explanations
 
-# --- 📤 ENVOI DU SIGNAL FORMATÉ SUR TELEGRAM ---
+# --- 📤 ENVOI DU SIGNAL SUR TELEGRAM ---
 async def send_signal_telegram(signal, confidence, explanations):
     now = dt.datetime.now(TIMEZONE)
     trade_time = (now + dt.timedelta(minutes=1)).strftime("%H:%M")
@@ -198,15 +176,15 @@ async def send_signal_telegram(signal, confidence, explanations):
         reply_markup=reply_markup
     )
 
-# --- ✅ RÉSULTAT DU TRADE APRÈS 60 SECONDES ---
+# --- ✅ ENVOI DU RÉSULTAT APRÈS 60s ---
 async def send_result_after_trade(signal, entry_price):
     await asyncio.sleep(60)
-
-    latest_data = get_ohlcv(PAIR, "1m", limit=1)
-    if latest_data.empty:
+    df = get_ohlcv(PAIR, "1m", 2)
+    if df.empty:
         return
 
-    exit_price = latest_data["close"].iloc[-1]
+    last = df.iloc[-1]
+    exit_price = last["close"]
     result = None
 
     if signal == "CALL":
@@ -217,11 +195,21 @@ async def send_result_after_trade(signal, entry_price):
     variation = round((exit_price - entry_price) / entry_price * 100, 3)
     direction = "↗️" if variation > 0 else "↘️"
 
-    reason = ""
     if result == "❌ PERDU":
-        reason = "🔎 *Le marché s’est retourné après le signal.*\nPeut-être une mèche ou un volume trop faible."
-    elif result == "✅ GAGNÉ":
-        reason = "📈 *Le signal a bien été confirmé par le marché.*"
+        if abs(variation) < 0.1:
+            reason = "🔸 Variation trop faible ➜ marché plat."
+            error_memory.append("range_market")
+        elif last["volume"] < df["volume"].rolling(20).mean().iloc[-1]:
+            reason = "🔸 Volume faible ➜ entrée peu fiable."
+            error_memory.append("low_volume")
+        elif last["RSI"] > 60 and signal == "CALL":
+            reason = "🔸 RSI trop élevé ➜ zone de retournement probable."
+            error_memory.append("rsi_high_on_call")
+        else:
+            reason = "🔎 Le marché s’est retourné brutalement."
+            error_memory.append("unclassified_error")
+    else:
+        reason = "📈 Le signal a été confirmé par le marché."
 
     msg = f"""
 🎯 *RÉSULTAT DU SIGNAL*
@@ -239,9 +227,8 @@ async def send_result_after_trade(signal, entry_price):
         chat_id=CHAT_ID,
         text=msg,
         parse_mode="Markdown"
-    ))
+    )
 
-    # Mémorisation du résultat
     daily_stats["total_signals"] += 1
     if result == "✅ GAGNÉ":
         daily_stats["wins"] += 1
@@ -249,12 +236,21 @@ async def send_result_after_trade(signal, entry_price):
         daily_stats["losses"] += 1
     daily_stats["directions"].append(signal)
 
-    await application.bot.send_message(
-        chat_id=CHAT_ID,
-        text=msg,
-        parse_mode="Markdown"
-    )
-# --- 🔄 ANALYSE AUTOMATIQUE & ENVOI DE SIGNAL ---
+# --- 🧠 AUTO-CORRECTION SIMPLIFIÉE DES ERREURS ---
+def adjust_strategy_based_on_errors():
+    if not error_memory:
+        return
+
+    stats = pd.Series(error_memory).value_counts()
+    print("🔁 Auto-correction basée sur les erreurs les plus fréquentes :")
+    print(stats)
+
+    if stats.get("range_market", 0) >= 2:
+        print("⚠️ Trop de marché plat ➜ éviter les signaux faibles.")
+    if stats.get("low_volume", 0) >= 2:
+        print("⚠️ Trop de volume faible ➜ filtrer les signaux par volume.")
+        
+# --- 🔄 MONITORING AUTOMATIQUE DU MARCHÉ ---
 async def monitor_market():
     while True:
         try:
@@ -278,20 +274,8 @@ async def monitor_market():
             print(f"Erreur dans monitor_market() : {e}")
 
         await asyncio.sleep(15)
-    # Mémorisation du résultat
-    daily_stats["total_signals"] += 1
-    if result == "✅ GAGNÉ":
-        daily_stats["wins"] += 1
-    elif result == "❌ PERDU":
-        daily_stats["losses"] += 1
-    daily_stats["directions"].append(signal)
 
-    await application.bot.send_message(
-        chat_id=CHAT_ID,
-        text=msg,
-        parse_mode="Markdown"
-    )
-# --- 🕐 MESSAGE DE RAPPORT PÉRIODIQUE SANS SIGNAL ---
+# --- 🕐 RAPPORT PÉRIODIQUE SANS SIGNAL ---
 async def send_no_signal_report(df):
     if df.empty:
         return
@@ -318,30 +302,23 @@ async def send_no_signal_report(df):
         text=msg,
         parse_mode="Markdown"
     )
-    
-# --- 📡 RÉCUPÉRATION DES ACTUS TWITTER ---
-import subprocess
 
-def get_latest_tweets(keyword="ethereum", limit=10):
+# --- 📡 RÉCUPÉRATION DES ACTUS TWITTER ---
+def get_latest_tweets(keyword="ethusdt", limit=10):
     try:
         command = f'snscrape --max-results {limit} twitter-search "{keyword}"'
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         tweets = result.stdout.strip().split("\n")
-        return tweets[-limit:]  # Retourne les derniers tweets utiles
+        return tweets[-limit:]
     except Exception as e:
         print(f"[TWITTER] Erreur récupération tweets : {e}")
         return []
-tweets = get_latest_tweets("ethusdt")
-for t in tweets:
-    print(t)
 
-# --- 💬 ANALYSE DE SENTIMENT D’UN TEXTE ---
-from textblob import TextBlob
-
+# --- 💬 ANALYSE DE SENTIMENT D’UN TWEET ---
 def analyze_sentiment(text):
     try:
         blob = TextBlob(text)
-        polarity = blob.sentiment.polarity  # Va de -1 (très négatif) à +1 (très positif)
+        polarity = blob.sentiment.polarity
         if polarity > 0.1:
             return "positif"
         elif polarity < -0.1:
@@ -351,12 +328,8 @@ def analyze_sentiment(text):
     except Exception as e:
         print(f"[SENTIMENT] Erreur : {e}")
         return "neutre"
-tweets = get_latest_tweets("ethusdt", 5)
-for t in tweets:
-    sentiment = analyze_sentiment(t)
-    print(f"> {sentiment} : {t[:100]}")
 
-# --- 🧪 ÉVALUATION DU SENTIMENT GLOBAL DES TWEETS ETH ---
+# --- 🧪 ÉVALUATION DU SENTIMENT GLOBAL DU MARCHÉ ---
 def evaluate_market_sentiment():
     tweets = get_latest_tweets("ethusdt", 10)
     sentiments = {"positif": 0, "négatif": 0, "neutre": 0}
@@ -372,17 +345,7 @@ def evaluate_market_sentiment():
     dominant = max(sentiments, key=sentiments.get)
     return dominant
 
-    # --- Ajustement du score selon l’actualité Twitter ---
-    sentiment = evaluate_market_sentiment()
-    if sentiment == "positif":
-        score += 5
-        explanations.append("💬 Sentiment Twitter global positif")
-    elif sentiment == "négatif":
-        score -= 5
-        explanations.append("💬 Sentiment Twitter global négatif")
-    else:
-        explanations.append("💬 Sentiment Twitter neutre")
-# --- 📊 ENVOI DU RÉSUMÉ JOURNALIER À 23h59 ---
+# --- 📊 RÉSUMÉ JOURNALIER À 23H59 ---
 async def send_daily_summary():
     total = daily_stats["total_signals"]
     wins = daily_stats["wins"]
@@ -403,30 +366,99 @@ async def send_daily_summary():
 💤 Bonne nuit ! Le bot reprendra demain matin automatiquement.
     """.strip()
 
-    # Réinitialisation des stats pour demain
+    chart_path = generate_performance_chart()
+
+    await application.bot.send_photo(chat_id=CHAT_ID, photo=open(chart_path, "rb"))
+    await application.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+
+    # Réinitialisation pour le lendemain
     for key in daily_stats:
         daily_stats[key] = 0 if key != "directions" else []
 
-    await application.bot.send_message(
-        chat_id=CHAT_ID,
-        text=msg,
-        parse_mode="Markdown"
+# --- 📈 GRAPHIQUE DE SUIVI DES PERFORMANCES ---
+def generate_performance_chart():
+    total = daily_stats["total_signals"]
+    wins = daily_stats["wins"]
+    losses = daily_stats["losses"]
+
+    labels = ["Gagnés", "Perdus"]
+    values = [wins, losses]
+    colors = ["green", "red"]
+
+    fig, ax = plt.subplots()
+    ax.bar(labels, values, color=colors)
+    ax.set_title("Performance quotidienne des signaux")
+    ax.set_ylabel("Nombre de trades")
+
+    filename = "performance.png"
+    plt.savefig(filename)
+    plt.close()
+    return filename
+
+# --- 🟢 COMMANDE /start ---
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("🛑 STOP", callback_data="stop")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "✅ Bot lancé avec succès et prêt à analyser les marchés !\nClique sur le bouton ci-dessous pour l'arrêter si nécessaire.",
+        reply_markup=reply_markup
     )
-# --- 🔁 LANCEMENT DU BOT & TÂCHES PLANIFIÉES ---
+
+# --- 🔘 BOUTON 🛑 STOP ---
+async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text("⛔️ Bot stoppé manuellement.")
+    os._exit(0)
+
+# --- 🔍 COMMANDE /verifie ---
+async def verifie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    df = get_ohlcv(PAIR, "1m", LIMIT)
+    if df.empty:
+        await update.message.reply_text("Erreur : impossible de récupérer les données.")
+        return
+
+    df = calculate_indicators(df)
+    signal, confidence, explanations = detect_signal(df)
+
+    if signal:
+        text = f"""
+✅ Signal détecté maintenant :
+Direction : {signal}
+Fiabilité : {confidence}%
+Contexte :
+{chr(10).join([f"- {e}" for e in explanations])}
+        """.strip()
+    else:
+        text = "❌ Aucun signal détecté actuellement."
+
+    await update.message.reply_text(text)
+
+# --- 📚 COMMANDE /historique ---
+async def historique_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📚 Fonction historique bientôt disponible (version simplifiée en cours de dev).")
+
+# --- 📌 ENREGISTREMENT DES HANDLERS ---
+application.add_handler(CommandHandler("start", start_command))
+application.add_handler(CommandHandler("verifie", verifie_command))
+application.add_handler(CommandHandler("historique", historique_command))
+application.add_handler(CallbackQueryHandler(handle_stop))
+
+# --- ⏰ PLANIFICATION DES TÂCHES AVEC APSCHEDULER ---
 if __name__ == "__main__":
     scheduler = AsyncIOScheduler()
 
+    # --- Rapport toutes les 30 minutes ---
     async def periodic_report():
         df = get_ohlcv(PAIR, "1m", LIMIT)
         df = calculate_indicators(df)
         await send_no_signal_report(df)
 
+    # Tâches planifiées
     scheduler.add_job(periodic_report, "interval", minutes=30)
-        scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
+    scheduler.add_job(send_daily_summary, "cron", hour=23, minute=59)
     scheduler.start()
 
-    application.add_handler(CommandHandler("start", lambda update, context: update.message.reply_text("🤖 Bot actif et en surveillance...")))
-
+    # Lancement de l’analyse + bot Telegram
     application.run_task(monitor_market())
     application.run_polling()
-
